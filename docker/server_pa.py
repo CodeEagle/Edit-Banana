@@ -491,8 +491,12 @@ def root():
           }
           button:disabled {
             opacity: 0.58;
-            cursor: wait;
+            cursor: not-allowed;
             transform: none;
+          }
+          button.is-busy,
+          button.is-busy:disabled {
+            cursor: wait;
           }
           .status {
             margin-top: 24px;
@@ -796,6 +800,9 @@ def root():
               missingCheckpoint: "SAM3 checkpoint",
               missingTokenizer: "Tokenizer",
               progressPreparing: "Preparing download",
+              downloadUnavailable: "Download unavailable",
+              downloadLinkMissingTag: "download link missing",
+              downloadConfigPrefix: "Missing download link for:",
             },
             zh: {
               tagline: "把图片或 PDF 转成可编辑的 Draw.io 图，交给 AI 处理",
@@ -833,6 +840,9 @@ def root():
               missingCheckpoint: "SAM3 模型权重",
               missingTokenizer: "Tokenizer 词表",
               progressPreparing: "正在准备下载",
+              downloadUnavailable: "下载地址未配置",
+              downloadLinkMissingTag: "未配置下载地址",
+              downloadConfigPrefix: "以下文件缺少下载地址：",
             },
           };
 
@@ -863,6 +873,7 @@ def root():
           const progressPercent = document.getElementById("progress-percent");
 
           let pollTimer = null;
+          let currentModelState = null;
 
           function localizeStaticText() {
             document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
@@ -907,6 +918,10 @@ def root():
             modalNote.className = "modal-note" + (kind ? " " + kind : "");
           }
 
+          function setBusyState(button, isBusy) {
+            button.classList.toggle("is-busy", Boolean(isBusy));
+          }
+
           function showModal() {
             modelModal.classList.add("visible");
             mainPanel.classList.add("blocked");
@@ -929,11 +944,39 @@ def root():
             pollTimer = window.setTimeout(refreshModelStatus, 1200);
           }
 
-          function renderMissingFiles(keys) {
+          function getFileLabel(key, fallbackLabel) {
+            if (fieldLabels[key]) {
+              return fieldLabels[key]();
+            }
+            return fallbackLabel || key;
+          }
+
+          function getMissingDownloadLinks(state) {
+            return (state.files || []).filter((file) => !file.exists && !file.url_configured);
+          }
+
+          function getNotConfiguredMessage(state) {
+            const missingLinks = getMissingDownloadLinks(state);
+            if (!missingLinks.length) {
+              return t("modelNotConfigured");
+            }
+
+            const separator = locale === "zh" ? "、" : ", ";
+            const names = missingLinks.map((file) => getFileLabel(file.key, file.label)).join(separator);
+            return `${t("downloadConfigPrefix")} ${names}`;
+          }
+
+          function renderMissingFiles(keys, files) {
+            const filesByKey = new Map((files || []).map((file) => [file.key, file]));
             missingFiles.innerHTML = "";
             keys.forEach((key) => {
+              const file = filesByKey.get(key);
               const li = document.createElement("li");
-              li.textContent = fieldLabels[key] ? fieldLabels[key]() : key;
+              const label = getFileLabel(key, file && file.label);
+              li.textContent =
+                file && !file.exists && !file.url_configured
+                  ? `${label} (${t("downloadLinkMissingTag")})`
+                  : label;
               missingFiles.appendChild(li);
             });
             missingFiles.classList.toggle("hidden", keys.length === 0);
@@ -962,7 +1005,12 @@ def root():
           }
 
           function applyModelState(state) {
+            currentModelState = state;
             updateProgress(state.progress);
+            setBusyState(downloadButton, false);
+            setBusyState(refreshButton, false);
+            setBusyState(resetButton, false);
+            downloadButton.textContent = t("download");
 
             if (state.ready) {
               stopPolling();
@@ -975,13 +1023,14 @@ def root():
 
             showModal();
             submitButton.disabled = true;
-            renderMissingFiles(state.missing_keys || []);
+            renderMissingFiles(state.missing_keys || [], state.files || []);
 
             if (state.progress.status === "downloading") {
               modalBody.textContent = t("modalBodyDownloading");
               downloadButton.disabled = true;
               refreshButton.disabled = true;
               resetButton.classList.add("hidden");
+              setBusyState(downloadButton, true);
               setModalNote(t("downloading"), "");
               setStatus(t("downloading"), "");
               schedulePolling();
@@ -1002,11 +1051,13 @@ def root():
 
             if (!state.downloadable) {
               modalBody.textContent = t("modalBodyUnavailable");
-              downloadButton.disabled = true;
+              downloadButton.disabled = false;
+              downloadButton.textContent = t("downloadUnavailable");
               refreshButton.disabled = false;
-              resetButton.classList.remove("hidden");
-              setModalNote(t("modelNotConfigured"), "error");
-              setStatus(t("modelNotConfigured"), "error");
+              resetButton.classList.add("hidden");
+              const detail = getNotConfiguredMessage(state);
+              setModalNote(detail, "error");
+              setStatus(detail, "error");
               return;
             }
 
@@ -1051,15 +1102,18 @@ def root():
 
           refreshButton.addEventListener("click", async () => {
             refreshButton.disabled = true;
+            setBusyState(refreshButton, true);
             setModalNote(t("refreshing"), "");
             await refreshModelStatus();
             refreshButton.disabled = false;
+            setBusyState(refreshButton, false);
           });
 
           resetButton.addEventListener("click", async () => {
             resetButton.disabled = true;
             downloadButton.disabled = true;
             refreshButton.disabled = true;
+            setBusyState(resetButton, true);
             setModalNote(t("resetting"), "");
 
             try {
@@ -1083,10 +1137,18 @@ def root():
               resetButton.disabled = false;
               downloadButton.disabled = false;
               refreshButton.disabled = false;
+              setBusyState(resetButton, false);
             }
           });
 
           downloadButton.addEventListener("click", async () => {
+            if (currentModelState && !currentModelState.downloadable) {
+              const detail = getNotConfiguredMessage(currentModelState);
+              setModalNote(detail, "error");
+              setStatus(detail, "error");
+              return;
+            }
+
             if (!consentCheckbox.checked) {
               setModalNote(t("confirmFirst"), "error");
               return;
@@ -1095,6 +1157,7 @@ def root():
             downloadButton.disabled = true;
             refreshButton.disabled = true;
             resetButton.classList.add("hidden");
+            setBusyState(downloadButton, true);
             setModalNote(t("downloading"), "");
             setStatus(t("downloading"), "");
 
@@ -1118,6 +1181,7 @@ def root():
               downloadButton.disabled = false;
               refreshButton.disabled = false;
               resetButton.classList.remove("hidden");
+              setBusyState(downloadButton, false);
             }
           });
 
