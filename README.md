@@ -10,7 +10,7 @@
 - Upstream repo: [BIT-DataLab/Edit-Banana](https://github.com/BIT-DataLab/Edit-Banana)
 - Homepage: [github.com/BIT-DataLab/Edit-Banana](https://github.com/BIT-DataLab/Edit-Banana)
 - Latest upstream commit used for initial migration: `126f86c479d6d30e96fac93cf7ab4d94bce68630` (`2026-03-09 00:49:25 +0800`)
-- Initial LazyCat package version: `0.20260309.4925`
+- Initial LazyCat package version: `1.0.0`
 - License used here: `AGPL-3.0`
 
 > [!IMPORTANT]
@@ -22,10 +22,12 @@
 - 容器入口：`http://edit-banana:8000/`
 - 懒猫入口：应用首页
 - 对外能力：
-  - `GET /`：简易主页，包含健康检查和 Swagger 文档入口
+  - `GET /`：内置上传界面，可直接上传文件并下载结果
   - `GET /docs`：FastAPI Swagger UI
   - `GET /health`：健康检查
   - `POST /convert`：上传图片并直接返回生成的 DrawIO 文件
+
+> 当前首页不是上游线上 demo 的原始 Web UI。上游仓库没有公开那套前端代码，这里补的是面向 LazyCat 安装包的简化上传界面。
 
 ## 为什么不是直接复用镜像
 
@@ -83,9 +85,9 @@
 
 1. 安装并启动应用
 2. 打开懒猫应用首页
-3. 访问根页面里的 `Swagger docs`
-4. 在 `POST /convert` 中上传图片
-5. 直接下载生成的 `.drawio.xml` 文件
+3. 在首页上传图片或 PDF
+4. 等待转换完成后下载 `.drawio.xml` 文件
+5. 需要调试接口时再进入 `Swagger docs`
 
 ## 已知限制
 
@@ -103,6 +105,7 @@
 - 推送到 GHCR
 - 复制到 `registry.lazycat.cloud`
 - 回写 `lzc-manifest.yml` 和 `Dockerfile`
+- 按普通 semver 递增 patch 版本号
 - 构建 `.lpk` 并创建 GitHub Release
 
 ## 本目录文件
