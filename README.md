@@ -61,7 +61,7 @@
 - `sam3.pt`
 - `bpe_simple_vocab_16e6.txt.gz`
 
-方式 B：在环境变量中提供可直链下载的 URL，首次启动自动拉取缺失文件
+方式 B：在环境变量中提供可直链下载的 URL，用户首次打开首页后确认下载，再按需拉取缺失文件
 
 - `SAM3_CHECKPOINT_URL`
 - `SAM3_BPE_URL`
@@ -71,7 +71,7 @@
 - `SAM3_CHECKPOINT_PATH=/app/models/sam3.pt`
 - `SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz`
 
-如果配置了 `SAM3_CHECKPOINT_URL` / `SAM3_BPE_URL`，启动脚本会在目标文件不存在时自动下载。这样可以避免把大模型直接打进 `.lpk`，也不需要每次重装后重新手工复制。
+如果配置了 `SAM3_CHECKPOINT_URL` / `SAM3_BPE_URL`，首页会在模型缺失时先弹出确认框。用户同意后，应用再把缺失文件下载到持久化目录。这样可以避免把大模型直接打进 `.lpk`，也不需要每次重装后重新手工复制。
 
 如果你放在其他路径，请同步调整 manifest 中的环境变量，或者修改挂载目录里的配置文件。
 
@@ -81,7 +81,7 @@
 - `SAM3_CHECKPOINT_PATH=/app/models/sam3.pt`
 - `SAM3_CHECKPOINT_URL=`
 - `SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz`
-- `SAM3_BPE_URL=`
+- `SAM3_BPE_URL=https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz`
 - `MULTIMODAL_MODE=api`
 - `MULTIMODAL_API_KEY=`
 - `MULTIMODAL_BASE_URL=`

@@ -22,7 +22,7 @@ services:
       - SAM3_CHECKPOINT_PATH=/app/models/sam3.pt
       - SAM3_CHECKPOINT_URL=
       - SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz
-      - SAM3_BPE_URL=
+      - SAM3_BPE_URL=https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz
       - MULTIMODAL_MODE=api
       - MULTIMODAL_API_KEY=
       - MULTIMODAL_BASE_URL=

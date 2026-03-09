@@ -3,23 +3,6 @@ set -eu
 
 mkdir -p /app/config /app/models "${OUTPUT_DIR:-/app/output}"
 
-download_if_missing() {
-  target_path="$1"
-  source_url="$2"
-  label="$3"
-
-  if [ -f "$target_path" ] || [ -z "$source_url" ]; then
-    return 0
-  fi
-
-  echo "Downloading missing ${label}..."
-  curl -fL --retry 3 --retry-delay 2 -o "${target_path}.tmp" "$source_url"
-  mv "${target_path}.tmp" "$target_path"
-}
-
-download_if_missing "${SAM3_CHECKPOINT_PATH:-/app/models/sam3.pt}" "${SAM3_CHECKPOINT_URL:-}" "SAM3 checkpoint"
-download_if_missing "${SAM3_BPE_PATH:-/app/models/bpe_simple_vocab_16e6.txt.gz}" "${SAM3_BPE_URL:-}" "SAM3 tokenizer"
-
 cat > /app/config/config.yaml <<EOF
 sam3:
   checkpoint_path: "${SAM3_CHECKPOINT_PATH:-/app/models/sam3.pt}"

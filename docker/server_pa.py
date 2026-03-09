@@ -4,6 +4,7 @@ LazyCat-friendly FastAPI entrypoint for Edit Banana.
 
 Changes from upstream:
 - root page provides a branded upload UI
+- models can be downloaded on demand after user consent
 - /convert returns the generated file directly
 - model/config validation errors are surfaced as 503
 """
@@ -11,13 +12,16 @@ Changes from upstream:
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+MODEL_DOWNLOAD_LOCK = threading.Lock()
 
 app = FastAPI(
     title="Edit Banana API",
@@ -27,23 +31,103 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "static")), name="static")
 
 
-def _load_pipeline():
-    from main import Pipeline, load_config
+def _load_config():
+    from main import load_config
 
-    config = load_config()
+    return load_config()
+
+
+def _model_status():
+    config = _load_config()
+    checkpoint_path = config.get("sam3", {}).get("checkpoint_path", "")
+    bpe_path = config.get("sam3", {}).get("bpe_path", "")
+    checkpoint_url = os.environ.get("SAM3_CHECKPOINT_URL", "").strip()
+    bpe_url = os.environ.get("SAM3_BPE_URL", "").strip()
+
+    files = [
+        {
+            "key": "checkpoint",
+            "label": "SAM3 checkpoint",
+            "path": checkpoint_path or "/app/models/sam3.pt",
+            "exists": bool(checkpoint_path and os.path.exists(checkpoint_path)),
+            "url_configured": bool(checkpoint_url),
+        },
+        {
+            "key": "tokenizer",
+            "label": "Tokenizer",
+            "path": bpe_path or "/app/models/bpe_simple_vocab_16e6.txt.gz",
+            "exists": bool(bpe_path and os.path.exists(bpe_path)),
+            "url_configured": bool(bpe_url),
+        },
+    ]
+    missing = [item["label"] for item in files if not item["exists"]]
+    downloadable = all(item["exists"] or item["url_configured"] for item in files)
+
+    return {
+        "ready": not missing,
+        "missing": missing,
+        "downloadable": downloadable,
+        "downloading": MODEL_DOWNLOAD_LOCK.locked(),
+        "files": files,
+    }
+
+
+def _download_file(target_path: str, source_url: str, label: str) -> None:
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    request = Request(source_url, headers={"User-Agent": "Edit-Banana-LazyCat/1.0"})
+    temp_path = f"{target_path}.tmp"
+
+    try:
+        with urlopen(request, timeout=300) as response, open(temp_path, "wb") as output_file:
+            shutil.copyfileobj(response, output_file)
+        os.replace(temp_path, target_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise HTTPException(status_code=502, detail=f"Failed to download {label}.")
+
+
+def _ensure_models_downloaded() -> None:
+    config = _load_config()
+    checkpoint_path = config.get("sam3", {}).get("checkpoint_path", "") or "/app/models/sam3.pt"
+    bpe_path = config.get("sam3", {}).get("bpe_path", "") or "/app/models/bpe_simple_vocab_16e6.txt.gz"
+    checkpoint_url = os.environ.get("SAM3_CHECKPOINT_URL", "").strip()
+    bpe_url = os.environ.get("SAM3_BPE_URL", "").strip()
+
+    if not os.path.exists(checkpoint_path):
+        if not checkpoint_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Checkpoint download URL is not configured.",
+            )
+        _download_file(checkpoint_path, checkpoint_url, "SAM3 checkpoint")
+
+    if not os.path.exists(bpe_path):
+        if not bpe_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Tokenizer download URL is not configured.",
+            )
+        _download_file(bpe_path, bpe_url, "tokenizer")
+
+
+def _load_pipeline():
+    from main import Pipeline
+
+    config = _load_config()
     checkpoint_path = config.get("sam3", {}).get("checkpoint_path", "")
     bpe_path = config.get("sam3", {}).get("bpe_path", "")
 
     if not checkpoint_path or not os.path.exists(checkpoint_path):
         raise HTTPException(
             status_code=503,
-            detail="Model files are not ready yet. Complete initialization and try again.",
+            detail="Model files are not ready yet. Download them from the home page first.",
         )
 
     if not bpe_path or not os.path.exists(bpe_path):
         raise HTTPException(
             status_code=503,
-            detail="Model files are not ready yet. Complete initialization and try again.",
+            detail="Model files are not ready yet. Download them from the home page first.",
         )
 
     output_dir = config.get("paths", {}).get("output_dir", "/app/output")
@@ -68,6 +152,7 @@ def root():
             --card: rgba(249, 247, 241, 0.94);
             --card-border: rgba(226, 210, 173, 0.7);
             --chip: #f5ddb0;
+            --overlay: rgba(25, 22, 16, 0.5);
           }
           * {
             box-sizing: border-box;
@@ -121,6 +206,13 @@ def root():
               0 30px 80px rgba(138, 109, 28, 0.12),
               inset 0 1px 0 rgba(255, 255, 255, 0.72);
             backdrop-filter: blur(12px);
+            transition: filter 180ms ease, opacity 180ms ease;
+          }
+          .panel.blocked {
+            filter: blur(4px);
+            opacity: 0.55;
+            pointer-events: none;
+            user-select: none;
           }
           .stamp {
             position: absolute;
@@ -322,6 +414,84 @@ def root():
           .assist strong {
             color: var(--ink);
           }
+          .modal {
+            position: fixed;
+            inset: 0;
+            display: none;
+            place-items: center;
+            padding: 20px;
+            background: var(--overlay);
+            z-index: 20;
+          }
+          .modal.visible {
+            display: grid;
+          }
+          .modal-card {
+            width: min(100%, 420px);
+            padding: 28px 24px;
+            border-radius: 28px;
+            background: rgba(255, 251, 240, 0.98);
+            border: 1px solid rgba(224, 205, 163, 0.92);
+            box-shadow: 0 24px 60px rgba(50, 38, 15, 0.22);
+          }
+          .modal-card h3 {
+            margin: 0;
+            font-size: 28px;
+            line-height: 1.05;
+            color: var(--ink);
+          }
+          .modal-card p {
+            margin: 14px 0 0;
+            font-size: 15px;
+            line-height: 1.55;
+            color: #6c7890;
+          }
+          .modal-card ul {
+            margin: 14px 0 0;
+            padding-left: 18px;
+            color: #6c7890;
+            font-size: 14px;
+            line-height: 1.5;
+          }
+          .consent {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            margin-top: 18px;
+            padding: 12px 14px;
+            border-radius: 16px;
+            background: rgba(244, 231, 193, 0.42);
+            color: #5d563f;
+            font-size: 14px;
+          }
+          .consent input {
+            margin-top: 3px;
+          }
+          .modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 18px;
+          }
+          .secondary-button {
+            background: rgba(236, 225, 203, 0.95);
+            color: #65563d;
+            box-shadow: none;
+          }
+          .modal-note {
+            margin-top: 14px;
+            min-height: 20px;
+            font-size: 13px;
+            color: #8b95aa;
+          }
+          .modal-note.error {
+            color: #b54708;
+          }
+          .modal-note.success {
+            color: #2f7f43;
+          }
+          .hidden {
+            display: none;
+          }
           @media (max-width: 820px) {
             .panel {
               padding: 34px 22px 26px;
@@ -342,12 +512,15 @@ def root():
               width: 88px;
               height: 88px;
             }
+            .modal-actions {
+              flex-direction: column;
+            }
           }
         </style>
       </head>
       <body>
         <main class="shell">
-          <section class="panel">
+          <section id="main-panel" class="panel blocked">
             <div class="stamp stamp-left"></div>
             <div class="stamp stamp-right"></div>
             <div class="brand">
@@ -378,7 +551,7 @@ def root():
               <div class="actions">
                 <button id="submit" type="submit">Convert and download</button>
               </div>
-              <div id="status" class="status">Ready when you are.</div>
+              <div id="status" class="status">Checking model status...</div>
             </form>
             <div class="feature-grid" aria-hidden="true">
               <div class="feature"><span class="feature-badge">AI</span><span class="feature-copy">AI-<br/>Powered</span></div>
@@ -388,21 +561,170 @@ def root():
             <div class="assist">Upload one file and the generated <strong>.drawio.xml</strong> download will start automatically.</div>
           </section>
         </main>
+
+        <div id="model-modal" class="modal visible" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+          <div class="modal-card">
+            <h3 id="modal-title">Prepare model files</h3>
+            <p id="modal-body">This app needs model files before it can convert diagrams.</p>
+            <ul id="missing-files"></ul>
+            <label class="consent" for="consent-checkbox">
+              <input id="consent-checkbox" type="checkbox" />
+              <span>I agree to download the required model files into this workspace storage.</span>
+            </label>
+            <div class="modal-actions">
+              <button id="download-models" type="button">Download and continue</button>
+              <button id="refresh-status" class="secondary-button" type="button">Refresh status</button>
+            </div>
+            <div id="modal-note" class="modal-note">Waiting for confirmation.</div>
+          </div>
+        </div>
+
         <script>
           const form = document.getElementById("convert-form");
           const fileInput = document.getElementById("file");
           const submitButton = document.getElementById("submit");
           const statusEl = document.getElementById("status");
           const fileNameEl = document.getElementById("file-name");
+          const mainPanel = document.getElementById("main-panel");
+          const modelModal = document.getElementById("model-modal");
+          const modalBody = document.getElementById("modal-body");
+          const missingFiles = document.getElementById("missing-files");
+          const consentCheckbox = document.getElementById("consent-checkbox");
+          const downloadButton = document.getElementById("download-models");
+          const refreshButton = document.getElementById("refresh-status");
+          const modalNote = document.getElementById("modal-note");
 
           function setStatus(message, kind) {
             statusEl.textContent = message;
             statusEl.className = "status" + (kind ? " " + kind : "");
           }
 
+          function setModalNote(message, kind) {
+            modalNote.textContent = message;
+            modalNote.className = "modal-note" + (kind ? " " + kind : "");
+          }
+
+          function showModal() {
+            modelModal.classList.add("visible");
+            mainPanel.classList.add("blocked");
+          }
+
+          function hideModal() {
+            modelModal.classList.remove("visible");
+            mainPanel.classList.remove("blocked");
+          }
+
+          function renderMissingFiles(items) {
+            missingFiles.innerHTML = "";
+            items.forEach((item) => {
+              const li = document.createElement("li");
+              li.textContent = item;
+              missingFiles.appendChild(li);
+            });
+            missingFiles.classList.toggle("hidden", items.length === 0);
+          }
+
+          function applyModelState(state) {
+            if (state.ready) {
+              hideModal();
+              submitButton.disabled = false;
+              setStatus("Ready when you are.", "");
+              return;
+            }
+
+            showModal();
+            submitButton.disabled = true;
+            renderMissingFiles(state.missing || []);
+
+            if (state.downloading) {
+              modalBody.textContent = "Model download is already running. This page will unlock once the files are ready.";
+              setModalNote("Refreshing status...", "");
+              downloadButton.disabled = true;
+              refreshButton.disabled = false;
+              setStatus("Downloading model files. This can take several minutes.", "");
+              return;
+            }
+
+            if (!state.downloadable) {
+              modalBody.textContent = "The required model files are missing, and download links are not configured yet.";
+              setModalNote("Ask the administrator to configure the missing model URL first.", "error");
+              downloadButton.disabled = true;
+              refreshButton.disabled = false;
+              setStatus("Model download is not configured yet.", "error");
+              return;
+            }
+
+            modalBody.textContent = "This app needs to download the required model files once before it can convert diagrams.";
+            downloadButton.disabled = false;
+            refreshButton.disabled = false;
+            setModalNote("Confirm below to start downloading.", "");
+            setStatus("Models are not ready yet.", "");
+          }
+
+          async function fetchModelStatus() {
+            const response = await fetch("/model-status", { cache: "no-store" });
+            if (!response.ok) {
+              throw new Error("Failed to read model status.");
+            }
+            return response.json();
+          }
+
+          async function refreshModelStatus() {
+            try {
+              const state = await fetchModelStatus();
+              applyModelState(state);
+              return state;
+            } catch (error) {
+              setModalNote(error.message || "Failed to load model status.", "error");
+              setStatus("Unable to load model status.", "error");
+              showModal();
+              return null;
+            }
+          }
+
           fileInput.addEventListener("change", () => {
             const file = fileInput.files[0];
             fileNameEl.textContent = file ? `Selected: ${file.name}` : "";
+          });
+
+          refreshButton.addEventListener("click", async () => {
+            refreshButton.disabled = true;
+            setModalNote("Refreshing status...", "");
+            await refreshModelStatus();
+            refreshButton.disabled = false;
+          });
+
+          downloadButton.addEventListener("click", async () => {
+            if (!consentCheckbox.checked) {
+              setModalNote("Please confirm the download agreement first.", "error");
+              return;
+            }
+
+            downloadButton.disabled = true;
+            refreshButton.disabled = true;
+            setModalNote("Downloading model files. Please keep this page open.", "");
+            setStatus("Downloading model files. This can take several minutes.", "");
+
+            try {
+              const response = await fetch("/initialize-models", { method: "POST" });
+              if (!response.ok) {
+                let detail = "Model download failed.";
+                try {
+                  const payload = await response.json();
+                  detail = payload.detail || detail;
+                } catch (_err) {
+                }
+                throw new Error(detail);
+              }
+
+              setModalNote("Download complete. Unlocking the upload page.", "success");
+              await refreshModelStatus();
+            } catch (error) {
+              setModalNote(error.message || "Model download failed.", "error");
+              setStatus(error.message || "Model download failed.", "error");
+              downloadButton.disabled = false;
+              refreshButton.disabled = false;
+            }
           });
 
           form.addEventListener("submit", async (event) => {
@@ -455,10 +777,42 @@ def root():
               submitButton.disabled = false;
             }
           });
+
+          refreshModelStatus();
         </script>
       </body>
     </html>
     """
+
+
+@app.get("/model-status")
+def model_status():
+    return _model_status()
+
+
+@app.post("/initialize-models")
+def initialize_models():
+    status = _model_status()
+    if status["ready"]:
+        return {"status": "ok", "ready": True}
+
+    if not status["downloadable"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Model download is not configured yet.",
+        )
+
+    if not MODEL_DOWNLOAD_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Model download is already in progress.",
+        )
+
+    try:
+        _ensure_models_downloaded()
+        return {"status": "ok", "ready": True}
+    finally:
+        MODEL_DOWNLOAD_LOCK.release()
 
 
 @app.get("/health")
