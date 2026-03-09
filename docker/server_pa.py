@@ -20,10 +20,9 @@ from pathlib import Path
 from typing import Optional
 from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_CONFIG_PATH = os.environ.get("MODEL_DOWNLOAD_CONFIG_PATH", "/app/config/model-download.json")
@@ -47,11 +46,6 @@ app = FastAPI(
     version="1.0.0",
 )
 app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "static")), name="static")
-
-
-class InitializeModelsRequest(BaseModel):
-    checkpoint_url: Optional[str] = None
-
 
 def _load_config():
     from main import load_config
@@ -1309,7 +1303,7 @@ def root():
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  checkpoint_url: checkpointUrlInput.value.trim(),
+                  checkpoint_url: checkpointUrlInput.value.trim() || null,
                 }),
               });
               if (!response.ok) {
@@ -1399,9 +1393,9 @@ def model_status():
 
 
 @app.post("/initialize-models", status_code=202)
-def initialize_models(payload: Optional[InitializeModelsRequest] = None):
-    if payload is not None:
-        _save_download_overrides(payload.checkpoint_url)
+def initialize_models(payload: Optional[dict] = Body(default=None)):
+    if isinstance(payload, dict):
+        _save_download_overrides(payload.get("checkpoint_url"))
 
     status = _model_status()
     if status["ready"]:
