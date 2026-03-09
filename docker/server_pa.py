@@ -5,10 +5,12 @@ LazyCat-friendly FastAPI entrypoint for Edit Banana.
 Changes from upstream:
 - root page provides a branded upload UI
 - models can be downloaded on demand after user consent
+- model download progress and reset are exposed to the UI
 - /convert returns the generated file directly
 - model/config validation errors are surfaced as 503
 """
 
+import copy
 import os
 import shutil
 import tempfile
@@ -22,6 +24,16 @@ from fastapi.staticfiles import StaticFiles
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 MODEL_DOWNLOAD_LOCK = threading.Lock()
+MODEL_STATE_LOCK = threading.Lock()
+MODEL_DOWNLOAD_STATE = {
+    "status": "idle",
+    "message": "",
+    "error": "",
+    "current_file": "",
+    "current_bytes": 0,
+    "total_bytes": 0,
+    "files": {},
+}
 
 app = FastAPI(
     title="Edit Banana API",
@@ -37,78 +49,205 @@ def _load_config():
     return load_config()
 
 
-def _model_status():
+def _model_definitions():
     config = _load_config()
-    checkpoint_path = config.get("sam3", {}).get("checkpoint_path", "")
-    bpe_path = config.get("sam3", {}).get("bpe_path", "")
-    checkpoint_url = os.environ.get("SAM3_CHECKPOINT_URL", "").strip()
-    bpe_url = os.environ.get("SAM3_BPE_URL", "").strip()
-
-    files = [
+    sam3_cfg = config.get("sam3", {})
+    return [
         {
             "key": "checkpoint",
             "label": "SAM3 checkpoint",
-            "path": checkpoint_path or "/app/models/sam3.pt",
-            "exists": bool(checkpoint_path and os.path.exists(checkpoint_path)),
-            "url_configured": bool(checkpoint_url),
+            "path": sam3_cfg.get("checkpoint_path", "") or "/app/models/sam3.pt",
+            "url": os.environ.get("SAM3_CHECKPOINT_URL", "").strip(),
         },
         {
             "key": "tokenizer",
             "label": "Tokenizer",
-            "path": bpe_path or "/app/models/bpe_simple_vocab_16e6.txt.gz",
-            "exists": bool(bpe_path and os.path.exists(bpe_path)),
-            "url_configured": bool(bpe_url),
+            "path": sam3_cfg.get("bpe_path", "") or "/app/models/bpe_simple_vocab_16e6.txt.gz",
+            "url": os.environ.get("SAM3_BPE_URL", "").strip(),
         },
     ]
-    missing = [item["label"] for item in files if not item["exists"]]
-    downloadable = all(item["exists"] or item["url_configured"] for item in files)
+
+
+def _reset_download_state():
+    with MODEL_STATE_LOCK:
+        MODEL_DOWNLOAD_STATE.update(
+            {
+                "status": "idle",
+                "message": "",
+                "error": "",
+                "current_file": "",
+                "current_bytes": 0,
+                "total_bytes": 0,
+                "files": {},
+            }
+        )
+
+
+def _update_download_state(**updates):
+    with MODEL_STATE_LOCK:
+        MODEL_DOWNLOAD_STATE.update(updates)
+
+
+def _update_file_progress(key: str, **updates):
+    with MODEL_STATE_LOCK:
+        file_state = MODEL_DOWNLOAD_STATE["files"].setdefault(key, {})
+        file_state.update(updates)
+
+
+def _snapshot_download_state():
+    with MODEL_STATE_LOCK:
+        return copy.deepcopy(MODEL_DOWNLOAD_STATE)
+
+
+def _model_status():
+    files = []
+    missing = []
+    missing_keys = []
+
+    for item in _model_definitions():
+        exists = os.path.exists(item["path"])
+        if not exists:
+            missing.append(item["label"])
+            missing_keys.append(item["key"])
+
+        files.append(
+            {
+                "key": item["key"],
+                "label": item["label"],
+                "path": item["path"],
+                "exists": exists,
+                "url_configured": bool(item["url"]),
+            }
+        )
+
+    downloadable = all(file["exists"] or file["url_configured"] for file in files)
+    progress = _snapshot_download_state()
+    total_bytes = progress.get("total_bytes") or 0
+    current_bytes = progress.get("current_bytes") or 0
+    percent = 0
+    if total_bytes > 0:
+        percent = round((current_bytes / total_bytes) * 100, 2)
+
+    status = progress.get("status", "idle")
+    if not missing and status != "downloading":
+        status = "ready"
 
     return {
         "ready": not missing,
         "missing": missing,
+        "missing_keys": missing_keys,
         "downloadable": downloadable,
         "downloading": MODEL_DOWNLOAD_LOCK.locked(),
         "files": files,
+        "progress": {
+            "status": status,
+            "message": progress.get("message", ""),
+            "error": progress.get("error", ""),
+            "current_file": progress.get("current_file", ""),
+            "current_bytes": current_bytes,
+            "total_bytes": total_bytes,
+            "percent": percent,
+            "files": progress.get("files", {}),
+        },
     }
 
 
-def _download_file(target_path: str, source_url: str, label: str) -> None:
+def _download_file(file_info: dict) -> None:
+    target_path = file_info["path"]
+    source_url = file_info["url"]
+    label = file_info["label"]
+    key = file_info["key"]
+    temp_path = f"{target_path}.tmp"
+
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
     request = Request(source_url, headers={"User-Agent": "Edit-Banana-LazyCat/1.0"})
-    temp_path = f"{target_path}.tmp"
 
     try:
         with urlopen(request, timeout=300) as response, open(temp_path, "wb") as output_file:
-            shutil.copyfileobj(response, output_file)
+            total_bytes = int(response.headers.get("Content-Length", "0") or "0")
+            _update_download_state(
+                status="downloading",
+                message=f"Downloading {label}",
+                error="",
+                current_file=key,
+                current_bytes=0,
+                total_bytes=total_bytes,
+            )
+            _update_file_progress(
+                key,
+                status="downloading",
+                downloaded_bytes=0,
+                total_bytes=total_bytes,
+                label=label,
+            )
+
+            downloaded = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output_file.write(chunk)
+                downloaded += len(chunk)
+                _update_download_state(current_bytes=downloaded, total_bytes=total_bytes)
+                _update_file_progress(
+                    key,
+                    status="downloading",
+                    downloaded_bytes=downloaded,
+                    total_bytes=total_bytes,
+                )
+
         os.replace(temp_path, target_path)
-    except Exception:
+        _update_file_progress(
+            key,
+            status="ready",
+            downloaded_bytes=os.path.getsize(target_path),
+            total_bytes=os.path.getsize(target_path),
+        )
+    except Exception as exc:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
-        raise HTTPException(status_code=502, detail=f"Failed to download {label}.")
+        raise RuntimeError(f"Failed to download {label}: {exc}") from exc
 
 
-def _ensure_models_downloaded() -> None:
-    config = _load_config()
-    checkpoint_path = config.get("sam3", {}).get("checkpoint_path", "") or "/app/models/sam3.pt"
-    bpe_path = config.get("sam3", {}).get("bpe_path", "") or "/app/models/bpe_simple_vocab_16e6.txt.gz"
-    checkpoint_url = os.environ.get("SAM3_CHECKPOINT_URL", "").strip()
-    bpe_url = os.environ.get("SAM3_BPE_URL", "").strip()
+def _download_models_worker():
+    try:
+        _reset_download_state()
+        _update_download_state(status="downloading", message="Preparing download")
 
-    if not os.path.exists(checkpoint_path):
-        if not checkpoint_url:
-            raise HTTPException(
-                status_code=400,
-                detail="Checkpoint download URL is not configured.",
-            )
-        _download_file(checkpoint_path, checkpoint_url, "SAM3 checkpoint")
+        for file_info in _model_definitions():
+            if os.path.exists(file_info["path"]):
+                size = os.path.getsize(file_info["path"])
+                _update_file_progress(
+                    file_info["key"],
+                    status="ready",
+                    downloaded_bytes=size,
+                    total_bytes=size,
+                    label=file_info["label"],
+                )
+                continue
 
-    if not os.path.exists(bpe_path):
-        if not bpe_url:
-            raise HTTPException(
-                status_code=400,
-                detail="Tokenizer download URL is not configured.",
-            )
-        _download_file(bpe_path, bpe_url, "tokenizer")
+            if not file_info["url"]:
+                raise RuntimeError(f"{file_info['label']} download URL is not configured.")
+
+            _download_file(file_info)
+
+        _update_download_state(
+            status="ready",
+            message="All model files are ready.",
+            error="",
+            current_file="",
+            current_bytes=0,
+            total_bytes=0,
+        )
+    except Exception as exc:
+        _update_download_state(
+            status="error",
+            message="Model download failed.",
+            error=str(exc),
+            current_file="",
+        )
+    finally:
+        MODEL_DOWNLOAD_LOCK.release()
 
 
 def _load_pipeline():
@@ -160,7 +299,7 @@ def root():
           body {
             margin: 0;
             min-height: 100vh;
-            font-family: "Avenir Next", "Trebuchet MS", "Helvetica Neue", sans-serif;
+            font-family: "Avenir Next", "Trebuchet MS", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
             background:
               radial-gradient(circle at 18% 20%, rgba(255, 250, 212, 0.7), transparent 24%),
               radial-gradient(circle at 78% 70%, rgba(245, 222, 149, 0.55), transparent 22%),
@@ -427,7 +566,7 @@ def root():
             display: grid;
           }
           .modal-card {
-            width: min(100%, 420px);
+            width: min(100%, 440px);
             padding: 28px 24px;
             border-radius: 28px;
             background: rgba(255, 251, 240, 0.98);
@@ -471,10 +610,16 @@ def root():
             display: flex;
             gap: 12px;
             margin-top: 18px;
+            flex-wrap: wrap;
           }
           .secondary-button {
             background: rgba(236, 225, 203, 0.95);
             color: #65563d;
+            box-shadow: none;
+          }
+          .danger-button {
+            background: #fff1ec;
+            color: #af3f17;
             box-shadow: none;
           }
           .modal-note {
@@ -488,6 +633,30 @@ def root():
           }
           .modal-note.success {
             color: #2f7f43;
+          }
+          .progress-wrap {
+            margin-top: 16px;
+          }
+          .progress-label {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 13px;
+            color: #6c7890;
+          }
+          .progress-bar {
+            margin-top: 8px;
+            height: 10px;
+            border-radius: 999px;
+            background: rgba(230, 214, 183, 0.85);
+            overflow: hidden;
+          }
+          .progress-fill {
+            width: 0%;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #f0a318 0%, #dd7f00 100%);
+            transition: width 180ms ease;
           }
           .hidden {
             display: none;
@@ -527,7 +696,7 @@ def root():
               <img src="/static/banana.jpg" alt="Edit Banana logo" />
               <h1>Edit Banana</h1>
             </div>
-            <p class="tagline">Transform your images or PDF into editable Draw.io diagrams with AI magic</p>
+            <p id="tagline" class="tagline">Transform your images or PDF into editable Draw.io diagrams with AI magic</p>
             <form id="convert-form">
               <div class="dropzone">
                 <label for="file">
@@ -536,8 +705,8 @@ def root():
                       <path d="M12 16V4m0 0-4 4m4-4 4 4M5 14v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path>
                     </svg>
                   </span>
-                  <h2>Drop your images or PDF here</h2>
-                  <p>or click to browse</p>
+                  <h2 id="drop-title">Drop your images or PDF here</h2>
+                  <p id="drop-subtitle">or click to browse</p>
                 </label>
                 <input id="file" type="file" accept=".png,.jpg,.jpeg,.pdf,.bmp,.tiff,.webp" />
                 <div id="file-name" class="file-name"></div>
@@ -554,11 +723,11 @@ def root():
               <div id="status" class="status">Checking model status...</div>
             </form>
             <div class="feature-grid" aria-hidden="true">
-              <div class="feature"><span class="feature-badge">AI</span><span class="feature-copy">AI-<br/>Powered</span></div>
-              <div class="feature"><span class="feature-badge">ED</span><span class="feature-copy">Fully<br/>Editable</span></div>
-              <div class="feature"><span class="feature-badge">IO</span><span class="feature-copy">Export to<br/>Draw.io</span></div>
+              <div class="feature"><span class="feature-badge">AI</span><span id="feature-ai" class="feature-copy">AI-<br/>Powered</span></div>
+              <div class="feature"><span class="feature-badge">ED</span><span id="feature-edit" class="feature-copy">Fully<br/>Editable</span></div>
+              <div class="feature"><span class="feature-badge">IO</span><span id="feature-export" class="feature-copy">Export to<br/>Draw.io</span></div>
             </div>
-            <div class="assist">Upload one file and the generated <strong>.drawio.xml</strong> download will start automatically.</div>
+            <div id="assist" class="assist">Upload one file and the generated <strong>.drawio.xml</strong> download will start automatically.</div>
           </section>
         </main>
 
@@ -567,19 +736,113 @@ def root():
             <h3 id="modal-title">Prepare model files</h3>
             <p id="modal-body">This app needs model files before it can convert diagrams.</p>
             <ul id="missing-files"></ul>
+            <div id="progress-wrap" class="progress-wrap hidden">
+              <div class="progress-label">
+                <span id="progress-file">Preparing download</span>
+                <span id="progress-percent">0%</span>
+              </div>
+              <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill"></div>
+              </div>
+            </div>
             <label class="consent" for="consent-checkbox">
               <input id="consent-checkbox" type="checkbox" />
-              <span>I agree to download the required model files into this workspace storage.</span>
+              <span id="consent-text">I agree to download the required model files into this workspace storage.</span>
             </label>
             <div class="modal-actions">
               <button id="download-models" type="button">Download and continue</button>
               <button id="refresh-status" class="secondary-button" type="button">Refresh status</button>
+              <button id="reset-download" class="danger-button hidden" type="button">Delete and retry</button>
             </div>
             <div id="modal-note" class="modal-note">Waiting for confirmation.</div>
           </div>
         </div>
 
         <script>
+          const messages = {
+            en: {
+              tagline: "Transform your images or PDF into editable Draw.io diagrams with AI magic",
+              dropTitle: "Drop your images or PDF here",
+              dropSubtitle: "or click to browse",
+              submit: "Convert and download",
+              checking: "Checking model status...",
+              featureAi: "AI-<br/>Powered",
+              featureEdit: "Fully<br/>Editable",
+              featureExport: "Export to<br/>Draw.io",
+              assist: "Upload one file and the generated <strong>.drawio.xml</strong> download will start automatically.",
+              modalTitle: "Prepare model files",
+              modalBodyNeed: "This app needs model files before it can convert diagrams.",
+              modalBodyUnavailable: "The required model files are missing, and at least one download link is not configured yet.",
+              modalBodyDownloading: "Model download is running. This page will unlock once the files are ready.",
+              consent: "I agree to download the required model files into this workspace storage.",
+              download: "Download and continue",
+              refresh: "Refresh status",
+              reset: "Delete and retry",
+              waiting: "Waiting for confirmation.",
+              ready: "Ready when you are.",
+              selectFirst: "Select a file first.",
+              uploading: "Uploading and converting. Large files can take a while.",
+              convertDone: "Conversion finished. Download started.",
+              modelNotReady: "Models are not ready yet.",
+              modelNotConfigured: "Model download is not configured yet.",
+              refreshFailed: "Failed to load model status.",
+              refreshing: "Refreshing status...",
+              confirmFirst: "Please confirm the download agreement first.",
+              downloading: "Downloading model files. This can take several minutes.",
+              downloadDone: "Download complete. Unlocking the upload page.",
+              resetDone: "Failed files were removed. You can start the download again.",
+              resetting: "Deleting downloaded files...",
+              resetFailed: "Failed to delete downloaded files.",
+              missingCheckpoint: "SAM3 checkpoint",
+              missingTokenizer: "Tokenizer",
+              progressPreparing: "Preparing download",
+            },
+            zh: {
+              tagline: "把图片或 PDF 转成可编辑的 Draw.io 图，交给 AI 处理",
+              dropTitle: "将图片或 PDF 拖到这里",
+              dropSubtitle: "或点击选择文件",
+              submit: "转换并下载",
+              checking: "正在检查模型状态...",
+              featureAi: "AI<br/>驱动",
+              featureEdit: "完全<br/>可编辑",
+              featureExport: "导出为<br/>Draw.io",
+              assist: "上传单个文件后，系统会自动开始下载生成的 <strong>.drawio.xml</strong> 文件。",
+              modalTitle: "准备模型文件",
+              modalBodyNeed: "在开始转换前，需要先下载模型文件。",
+              modalBodyUnavailable: "缺少模型文件，而且至少有一个下载地址还没有配置。",
+              modalBodyDownloading: "模型下载进行中，文件准备完成后页面会自动解锁。",
+              consent: "我同意将所需模型文件下载到当前工作区存储中。",
+              download: "同意并开始下载",
+              refresh: "刷新状态",
+              reset: "删除后重下",
+              waiting: "等待确认。",
+              ready: "已经就绪，可以开始使用。",
+              selectFirst: "请先选择一个文件。",
+              uploading: "正在上传并转换，较大的文件会稍慢一些。",
+              convertDone: "转换完成，已开始下载。",
+              modelNotReady: "模型尚未准备好。",
+              modelNotConfigured: "模型下载地址还没有配置好。",
+              refreshFailed: "读取模型状态失败。",
+              refreshing: "正在刷新状态...",
+              confirmFirst: "请先勾选同意下载。",
+              downloading: "正在下载模型文件，这可能需要几分钟。",
+              downloadDone: "下载完成，正在解锁上传页面。",
+              resetDone: "失败文件已删除，可以重新开始下载。",
+              resetting: "正在删除已下载文件...",
+              resetFailed: "删除已下载文件失败。",
+              missingCheckpoint: "SAM3 模型权重",
+              missingTokenizer: "Tokenizer 词表",
+              progressPreparing: "正在准备下载",
+            },
+          };
+
+          const locale = navigator.language && navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+          const t = (key) => messages[locale][key] || messages.en[key] || key;
+          const fieldLabels = {
+            checkpoint: () => t("missingCheckpoint"),
+            tokenizer: () => t("missingTokenizer"),
+          };
+
           const form = document.getElementById("convert-form");
           const fileInput = document.getElementById("file");
           const submitButton = document.getElementById("submit");
@@ -592,7 +855,47 @@ def root():
           const consentCheckbox = document.getElementById("consent-checkbox");
           const downloadButton = document.getElementById("download-models");
           const refreshButton = document.getElementById("refresh-status");
+          const resetButton = document.getElementById("reset-download");
           const modalNote = document.getElementById("modal-note");
+          const progressWrap = document.getElementById("progress-wrap");
+          const progressFill = document.getElementById("progress-fill");
+          const progressFile = document.getElementById("progress-file");
+          const progressPercent = document.getElementById("progress-percent");
+
+          let pollTimer = null;
+
+          function localizeStaticText() {
+            document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+            document.getElementById("tagline").textContent = t("tagline");
+            document.getElementById("drop-title").textContent = t("dropTitle");
+            document.getElementById("drop-subtitle").textContent = t("dropSubtitle");
+            document.getElementById("submit").textContent = t("submit");
+            document.getElementById("status").textContent = t("checking");
+            document.getElementById("feature-ai").innerHTML = t("featureAi");
+            document.getElementById("feature-edit").innerHTML = t("featureEdit");
+            document.getElementById("feature-export").innerHTML = t("featureExport");
+            document.getElementById("assist").innerHTML = t("assist");
+            document.getElementById("modal-title").textContent = t("modalTitle");
+            document.getElementById("modal-body").textContent = t("modalBodyNeed");
+            document.getElementById("consent-text").textContent = t("consent");
+            document.getElementById("download-models").textContent = t("download");
+            document.getElementById("refresh-status").textContent = t("refresh");
+            document.getElementById("reset-download").textContent = t("reset");
+            document.getElementById("modal-note").textContent = t("waiting");
+            document.getElementById("progress-file").textContent = t("progressPreparing");
+          }
+
+          function formatBytes(value) {
+            if (!value) return "0 B";
+            const units = ["B", "KB", "MB", "GB"];
+            let size = value;
+            let unit = 0;
+            while (size >= 1024 && unit < units.length - 1) {
+              size /= 1024;
+              unit += 1;
+            }
+            return `${size.toFixed(size >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+          }
 
           function setStatus(message, kind) {
             statusEl.textContent = message;
@@ -614,57 +917,111 @@ def root():
             mainPanel.classList.remove("blocked");
           }
 
-          function renderMissingFiles(items) {
+          function stopPolling() {
+            if (pollTimer) {
+              window.clearTimeout(pollTimer);
+              pollTimer = null;
+            }
+          }
+
+          function schedulePolling() {
+            stopPolling();
+            pollTimer = window.setTimeout(refreshModelStatus, 1200);
+          }
+
+          function renderMissingFiles(keys) {
             missingFiles.innerHTML = "";
-            items.forEach((item) => {
+            keys.forEach((key) => {
               const li = document.createElement("li");
-              li.textContent = item;
+              li.textContent = fieldLabels[key] ? fieldLabels[key]() : key;
               missingFiles.appendChild(li);
             });
-            missingFiles.classList.toggle("hidden", items.length === 0);
+            missingFiles.classList.toggle("hidden", keys.length === 0);
+          }
+
+          function updateProgress(progress) {
+            const isActive = progress.status === "downloading";
+            progressWrap.classList.toggle("hidden", !isActive);
+            if (!isActive) {
+              progressFill.style.width = "0%";
+              progressPercent.textContent = "0%";
+              progressFile.textContent = t("progressPreparing");
+              return;
+            }
+
+            const fileKey = progress.current_file;
+            const fileLabel = fieldLabels[fileKey] ? fieldLabels[fileKey]() : t("progressPreparing");
+            progressFile.textContent =
+              progress.total_bytes > 0
+                ? `${fileLabel} · ${formatBytes(progress.current_bytes)} / ${formatBytes(progress.total_bytes)}`
+                : `${fileLabel} · ${formatBytes(progress.current_bytes)}`;
+
+            const percent = progress.total_bytes > 0 ? Math.min(progress.percent || 0, 100) : 0;
+            progressPercent.textContent = progress.total_bytes > 0 ? `${Math.round(percent)}%` : "...";
+            progressFill.style.width = progress.total_bytes > 0 ? `${percent}%` : "12%";
           }
 
           function applyModelState(state) {
+            updateProgress(state.progress);
+
             if (state.ready) {
+              stopPolling();
               hideModal();
+              resetButton.classList.add("hidden");
               submitButton.disabled = false;
-              setStatus("Ready when you are.", "");
+              setStatus(t("ready"), "");
               return;
             }
 
             showModal();
             submitButton.disabled = true;
-            renderMissingFiles(state.missing || []);
+            renderMissingFiles(state.missing_keys || []);
 
-            if (state.downloading) {
-              modalBody.textContent = "Model download is already running. This page will unlock once the files are ready.";
-              setModalNote("Refreshing status...", "");
+            if (state.progress.status === "downloading") {
+              modalBody.textContent = t("modalBodyDownloading");
               downloadButton.disabled = true;
+              refreshButton.disabled = true;
+              resetButton.classList.add("hidden");
+              setModalNote(t("downloading"), "");
+              setStatus(t("downloading"), "");
+              schedulePolling();
+              return;
+            }
+
+            stopPolling();
+
+            if (state.progress.status === "error") {
+              modalBody.textContent = t("modalBodyNeed");
+              downloadButton.disabled = false;
               refreshButton.disabled = false;
-              setStatus("Downloading model files. This can take several minutes.", "");
+              resetButton.classList.remove("hidden");
+              setModalNote(state.progress.error || t("resetFailed"), "error");
+              setStatus(state.progress.error || t("resetFailed"), "error");
               return;
             }
 
             if (!state.downloadable) {
-              modalBody.textContent = "The required model files are missing, and download links are not configured yet.";
-              setModalNote("Ask the administrator to configure the missing model URL first.", "error");
+              modalBody.textContent = t("modalBodyUnavailable");
               downloadButton.disabled = true;
               refreshButton.disabled = false;
-              setStatus("Model download is not configured yet.", "error");
+              resetButton.classList.remove("hidden");
+              setModalNote(t("modelNotConfigured"), "error");
+              setStatus(t("modelNotConfigured"), "error");
               return;
             }
 
-            modalBody.textContent = "This app needs to download the required model files once before it can convert diagrams.";
+            modalBody.textContent = t("modalBodyNeed");
             downloadButton.disabled = false;
             refreshButton.disabled = false;
-            setModalNote("Confirm below to start downloading.", "");
-            setStatus("Models are not ready yet.", "");
+            resetButton.classList.add("hidden");
+            setModalNote(t("waiting"), "");
+            setStatus(t("modelNotReady"), "");
           }
 
           async function fetchModelStatus() {
             const response = await fetch("/model-status", { cache: "no-store" });
             if (!response.ok) {
-              throw new Error("Failed to read model status.");
+              throw new Error(t("refreshFailed"));
             }
             return response.json();
           }
@@ -675,8 +1032,9 @@ def root():
               applyModelState(state);
               return state;
             } catch (error) {
-              setModalNote(error.message || "Failed to load model status.", "error");
-              setStatus("Unable to load model status.", "error");
+              stopPolling();
+              setModalNote(error.message || t("refreshFailed"), "error");
+              setStatus(error.message || t("refreshFailed"), "error");
               showModal();
               return null;
             }
@@ -684,31 +1042,30 @@ def root():
 
           fileInput.addEventListener("change", () => {
             const file = fileInput.files[0];
-            fileNameEl.textContent = file ? `Selected: ${file.name}` : "";
+            fileNameEl.textContent = file
+              ? locale === "zh"
+                ? `已选择：${file.name}`
+                : `Selected: ${file.name}`
+              : "";
           });
 
           refreshButton.addEventListener("click", async () => {
             refreshButton.disabled = true;
-            setModalNote("Refreshing status...", "");
+            setModalNote(t("refreshing"), "");
             await refreshModelStatus();
             refreshButton.disabled = false;
           });
 
-          downloadButton.addEventListener("click", async () => {
-            if (!consentCheckbox.checked) {
-              setModalNote("Please confirm the download agreement first.", "error");
-              return;
-            }
-
+          resetButton.addEventListener("click", async () => {
+            resetButton.disabled = true;
             downloadButton.disabled = true;
             refreshButton.disabled = true;
-            setModalNote("Downloading model files. Please keep this page open.", "");
-            setStatus("Downloading model files. This can take several minutes.", "");
+            setModalNote(t("resetting"), "");
 
             try {
-              const response = await fetch("/initialize-models", { method: "POST" });
+              const response = await fetch("/initialize-models", { method: "DELETE" });
               if (!response.ok) {
-                let detail = "Model download failed.";
+                let detail = t("resetFailed");
                 try {
                   const payload = await response.json();
                   detail = payload.detail || detail;
@@ -717,13 +1074,50 @@ def root():
                 throw new Error(detail);
               }
 
-              setModalNote("Download complete. Unlocking the upload page.", "success");
+              consentCheckbox.checked = false;
+              setModalNote(t("resetDone"), "success");
               await refreshModelStatus();
             } catch (error) {
-              setModalNote(error.message || "Model download failed.", "error");
-              setStatus(error.message || "Model download failed.", "error");
+              setModalNote(error.message || t("resetFailed"), "error");
+            } finally {
+              resetButton.disabled = false;
               downloadButton.disabled = false;
               refreshButton.disabled = false;
+            }
+          });
+
+          downloadButton.addEventListener("click", async () => {
+            if (!consentCheckbox.checked) {
+              setModalNote(t("confirmFirst"), "error");
+              return;
+            }
+
+            downloadButton.disabled = true;
+            refreshButton.disabled = true;
+            resetButton.classList.add("hidden");
+            setModalNote(t("downloading"), "");
+            setStatus(t("downloading"), "");
+
+            try {
+              const response = await fetch("/initialize-models", { method: "POST" });
+              if (!response.ok) {
+                let detail = t("modelNotConfigured");
+                try {
+                  const payload = await response.json();
+                  detail = payload.detail || detail;
+                } catch (_err) {
+                }
+                throw new Error(detail);
+              }
+
+              await refreshModelStatus();
+              schedulePolling();
+            } catch (error) {
+              setModalNote(error.message || t("modelNotConfigured"), "error");
+              setStatus(error.message || t("modelNotConfigured"), "error");
+              downloadButton.disabled = false;
+              refreshButton.disabled = false;
+              resetButton.classList.remove("hidden");
             }
           });
 
@@ -731,7 +1125,7 @@ def root():
             event.preventDefault();
             const file = fileInput.files[0];
             if (!file) {
-              setStatus("Select a file first.", "error");
+              setStatus(t("selectFirst"), "error");
               return;
             }
 
@@ -739,7 +1133,7 @@ def root():
             formData.append("file", file);
 
             submitButton.disabled = true;
-            setStatus("Uploading and converting. Large files can take a while.", "");
+            setStatus(t("uploading"), "");
 
             try {
               const response = await fetch("/convert", {
@@ -770,7 +1164,7 @@ def root():
               link.click();
               link.remove();
               window.URL.revokeObjectURL(url);
-              setStatus("Conversion finished. Download started.", "success");
+              setStatus(t("convertDone"), "success");
             } catch (error) {
               setStatus(error.message || "Conversion failed.", "error");
             } finally {
@@ -778,6 +1172,7 @@ def root():
             }
           });
 
+          localizeStaticText();
           refreshModelStatus();
         </script>
       </body>
@@ -790,29 +1185,35 @@ def model_status():
     return _model_status()
 
 
-@app.post("/initialize-models")
+@app.post("/initialize-models", status_code=202)
 def initialize_models():
     status = _model_status()
     if status["ready"]:
         return {"status": "ok", "ready": True}
 
     if not status["downloadable"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Model download is not configured yet.",
-        )
+        raise HTTPException(status_code=400, detail="Model download is not configured yet.")
 
     if not MODEL_DOWNLOAD_LOCK.acquire(blocking=False):
-        raise HTTPException(
-            status_code=409,
-            detail="Model download is already in progress.",
-        )
+        return {"status": "accepted", "ready": False}
 
-    try:
-        _ensure_models_downloaded()
-        return {"status": "ok", "ready": True}
-    finally:
-        MODEL_DOWNLOAD_LOCK.release()
+    thread = threading.Thread(target=_download_models_worker, daemon=True)
+    thread.start()
+    return {"status": "accepted", "ready": False}
+
+
+@app.delete("/initialize-models")
+def reset_models():
+    if MODEL_DOWNLOAD_LOCK.locked():
+        raise HTTPException(status_code=409, detail="Model download is in progress.")
+
+    for file_info in _model_definitions():
+        for path in (file_info["path"], f"{file_info['path']}.tmp"):
+            if os.path.exists(path):
+                os.unlink(path)
+
+    _reset_download_state()
+    return {"status": "ok"}
 
 
 @app.get("/health")
