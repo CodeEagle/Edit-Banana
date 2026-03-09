@@ -11,18 +11,24 @@ Changes from upstream:
 """
 
 import copy
+import json
 import os
 import shutil
 import tempfile
 import threading
 from pathlib import Path
+from typing import Optional
 from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DOWNLOAD_CONFIG_PATH = os.environ.get("MODEL_DOWNLOAD_CONFIG_PATH", "/app/config/model-download.json")
+DEFAULT_SAM3_CHECKPOINT_URL = "https://www.modelscope.cn/models/facebook/sam3/resolve/master/sam3.pt"
+DEFAULT_SAM3_BPE_URL = "https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz"
 MODEL_DOWNLOAD_LOCK = threading.Lock()
 MODEL_STATE_LOCK = threading.Lock()
 MODEL_DOWNLOAD_STATE = {
@@ -43,27 +49,93 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "static")), name="static")
 
 
+class InitializeModelsRequest(BaseModel):
+    checkpoint_url: Optional[str] = None
+
+
 def _load_config():
     from main import load_config
 
     return load_config()
 
 
+def _normalize_url(value: Optional[str]) -> str:
+    return (value or "").strip()
+
+
+def _load_download_overrides() -> dict:
+    try:
+        with open(DOWNLOAD_CONFIG_PATH, "r", encoding="utf-8") as file:
+            data = json.load(file)
+            return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def _save_download_overrides(checkpoint_url: Optional[str]) -> None:
+    data = _load_download_overrides()
+    normalized = _normalize_url(checkpoint_url)
+
+    if normalized:
+        data["checkpoint_url"] = normalized
+    else:
+        data.pop("checkpoint_url", None)
+
+    os.makedirs(os.path.dirname(DOWNLOAD_CONFIG_PATH), exist_ok=True)
+    with open(DOWNLOAD_CONFIG_PATH, "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=True, indent=2)
+
+
+def _resolve_download_url(config_key: str, env_key: str, default_url: str) -> tuple[str, str, str]:
+    overrides = _load_download_overrides()
+    custom_url = _normalize_url(overrides.get(config_key))
+    if custom_url:
+        return custom_url, "custom", custom_url
+
+    env_url = _normalize_url(os.environ.get(env_key, ""))
+    if env_url:
+        return env_url, "env", custom_url
+
+    default_value = _normalize_url(default_url)
+    if default_value:
+        return default_value, "default", custom_url
+
+    return "", "missing", custom_url
+
+
 def _model_definitions():
     config = _load_config()
     sam3_cfg = config.get("sam3", {})
+    checkpoint_url, checkpoint_source, checkpoint_custom = _resolve_download_url(
+        "checkpoint_url",
+        "SAM3_CHECKPOINT_URL",
+        DEFAULT_SAM3_CHECKPOINT_URL,
+    )
+    tokenizer_url, tokenizer_source, _ = _resolve_download_url(
+        "tokenizer_url",
+        "SAM3_BPE_URL",
+        DEFAULT_SAM3_BPE_URL,
+    )
     return [
         {
             "key": "checkpoint",
             "label": "SAM3 checkpoint",
             "path": sam3_cfg.get("checkpoint_path", "") or "/app/models/sam3.pt",
-            "url": os.environ.get("SAM3_CHECKPOINT_URL", "").strip(),
+            "url": checkpoint_url,
+            "url_source": checkpoint_source,
+            "custom_url": checkpoint_custom,
+            "default_url": DEFAULT_SAM3_CHECKPOINT_URL,
         },
         {
             "key": "tokenizer",
             "label": "Tokenizer",
             "path": sam3_cfg.get("bpe_path", "") or "/app/models/bpe_simple_vocab_16e6.txt.gz",
-            "url": os.environ.get("SAM3_BPE_URL", "").strip(),
+            "url": tokenizer_url,
+            "url_source": tokenizer_source,
+            "custom_url": "",
+            "default_url": DEFAULT_SAM3_BPE_URL,
         },
     ]
 
@@ -117,6 +189,9 @@ def _model_status():
                 "path": item["path"],
                 "exists": exists,
                 "url_configured": bool(item["url"]),
+                "url_source": item.get("url_source", "missing"),
+                "custom_url": item.get("custom_url", ""),
+                "default_url": item.get("default_url", ""),
             }
         )
 
@@ -139,6 +214,11 @@ def _model_status():
         "downloadable": downloadable,
         "downloading": MODEL_DOWNLOAD_LOCK.locked(),
         "files": files,
+        "download_config": {
+            "checkpoint_url": next((file["custom_url"] for file in files if file["key"] == "checkpoint"), ""),
+            "checkpoint_default_url": next((file["default_url"] for file in files if file["key"] == "checkpoint"), ""),
+            "checkpoint_source": next((file["url_source"] for file in files if file["key"] == "checkpoint"), "missing"),
+        },
         "progress": {
             "status": status,
             "message": progress.get("message", ""),
@@ -616,6 +696,36 @@ def root():
             margin-top: 18px;
             flex-wrap: wrap;
           }
+          .url-config {
+            margin-top: 16px;
+          }
+          .url-config label {
+            display: block;
+            margin-bottom: 8px;
+            color: #5d563f;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: default;
+          }
+          .url-config input {
+            width: 100%;
+            border: 1px solid rgba(215, 190, 136, 0.92);
+            border-radius: 14px;
+            padding: 12px 14px;
+            font-size: 14px;
+            color: var(--ink);
+            background: rgba(255, 252, 245, 0.98);
+          }
+          .url-config input:focus {
+            outline: 2px solid rgba(226, 135, 9, 0.26);
+            border-color: rgba(226, 135, 9, 0.9);
+          }
+          .field-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.45;
+            color: #8b95aa;
+          }
           .secondary-button {
             background: rgba(236, 225, 203, 0.95);
             color: #65563d;
@@ -753,6 +863,11 @@ def root():
               <input id="consent-checkbox" type="checkbox" />
               <span id="consent-text">I agree to download the required model files into this workspace storage.</span>
             </label>
+            <div class="url-config">
+              <label id="checkpoint-url-label" for="checkpoint-url">Custom SAM3 checkpoint URL (optional)</label>
+              <input id="checkpoint-url" type="url" spellcheck="false" placeholder="Leave blank to use the default mirror" />
+              <div id="checkpoint-url-hint" class="field-hint">Leave this empty to use the built-in default source. Filling it will save your custom address for later retries.</div>
+            </div>
             <div class="modal-actions">
               <button id="download-models" type="button">Download and continue</button>
               <button id="refresh-status" class="secondary-button" type="button">Refresh status</button>
@@ -803,6 +918,11 @@ def root():
               downloadUnavailable: "Download unavailable",
               downloadLinkMissingTag: "download link missing",
               downloadConfigPrefix: "Missing download link for:",
+              checkpointUrlLabel: "Custom SAM3 checkpoint URL (optional)",
+              checkpointUrlPlaceholder: "Leave blank to use the default mirror",
+              checkpointUrlHint: "Leave this empty to use the built-in default source. Filling it will save your custom address for later retries.",
+              checkpointUrlSaved: "Custom download address saved.",
+              usingDefaultSource: "Using the default model source.",
             },
             zh: {
               tagline: "把图片或 PDF 转成可编辑的 Draw.io 图，交给 AI 处理",
@@ -843,6 +963,11 @@ def root():
               downloadUnavailable: "下载地址未配置",
               downloadLinkMissingTag: "未配置下载地址",
               downloadConfigPrefix: "以下文件缺少下载地址：",
+              checkpointUrlLabel: "自定义 SAM3 模型下载地址（可选）",
+              checkpointUrlPlaceholder: "留空则使用默认镜像地址",
+              checkpointUrlHint: "留空会使用内置默认下载源；填写后会保存你的自定义地址，后续重试继续使用。",
+              checkpointUrlSaved: "自定义下载地址已保存。",
+              usingDefaultSource: "当前使用默认模型下载源。",
             },
           };
 
@@ -871,6 +996,8 @@ def root():
           const progressFill = document.getElementById("progress-fill");
           const progressFile = document.getElementById("progress-file");
           const progressPercent = document.getElementById("progress-percent");
+          const checkpointUrlInput = document.getElementById("checkpoint-url");
+          const checkpointUrlHint = document.getElementById("checkpoint-url-hint");
 
           let pollTimer = null;
           let currentModelState = null;
@@ -894,6 +1021,9 @@ def root():
             document.getElementById("reset-download").textContent = t("reset");
             document.getElementById("modal-note").textContent = t("waiting");
             document.getElementById("progress-file").textContent = t("progressPreparing");
+            document.getElementById("checkpoint-url-label").textContent = t("checkpointUrlLabel");
+            document.getElementById("checkpoint-url").placeholder = t("checkpointUrlPlaceholder");
+            document.getElementById("checkpoint-url-hint").textContent = t("checkpointUrlHint");
           }
 
           function formatBytes(value) {
@@ -920,6 +1050,18 @@ def root():
 
           function setBusyState(button, isBusy) {
             button.classList.toggle("is-busy", Boolean(isBusy));
+          }
+
+          function syncDownloadConfig(state) {
+            const config = state.download_config || {};
+            if (document.activeElement !== checkpointUrlInput) {
+              checkpointUrlInput.value = config.checkpoint_url || "";
+            }
+
+            checkpointUrlHint.textContent =
+              config.checkpoint_source === "custom"
+                ? t("checkpointUrlSaved")
+                : t("checkpointUrlHint");
           }
 
           function showModal() {
@@ -1007,6 +1149,7 @@ def root():
           function applyModelState(state) {
             currentModelState = state;
             updateProgress(state.progress);
+            syncDownloadConfig(state);
             setBusyState(downloadButton, false);
             setBusyState(refreshButton, false);
             setBusyState(resetButton, false);
@@ -1162,7 +1305,13 @@ def root():
             setStatus(t("downloading"), "");
 
             try {
-              const response = await fetch("/initialize-models", { method: "POST" });
+              const response = await fetch("/initialize-models", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  checkpoint_url: checkpointUrlInput.value.trim(),
+                }),
+              });
               if (!response.ok) {
                 let detail = t("modelNotConfigured");
                 try {
@@ -1250,7 +1399,10 @@ def model_status():
 
 
 @app.post("/initialize-models", status_code=202)
-def initialize_models():
+def initialize_models(payload: Optional[InitializeModelsRequest] = None):
+    if payload is not None:
+        _save_download_overrides(payload.checkpoint_url)
+
     status = _model_status()
     if status["ready"]:
         return {"status": "ok", "ready": True}

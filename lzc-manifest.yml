@@ -20,7 +20,7 @@ services:
     environment:
       - OUTPUT_DIR=/app/output
       - SAM3_CHECKPOINT_PATH=/app/models/sam3.pt
-      - SAM3_CHECKPOINT_URL=
+      - SAM3_CHECKPOINT_URL=https://www.modelscope.cn/models/facebook/sam3/resolve/master/sam3.pt
       - SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz
       - SAM3_BPE_URL=https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz
       - MULTIMODAL_MODE=api

@@ -61,7 +61,7 @@
 - `sam3.pt`
 - `bpe_simple_vocab_16e6.txt.gz`
 
-方式 B：在环境变量中提供可直链下载的 URL，用户首次打开首页后确认下载，再按需拉取缺失文件
+方式 B：在环境变量中提供可直链下载的 URL，或者让用户在首页填写自定义地址。用户首次打开首页后确认下载，再按需拉取缺失文件
 
 - `SAM3_CHECKPOINT_URL`
 - `SAM3_BPE_URL`
@@ -69,9 +69,10 @@
 默认环境变量已经指向：
 
 - `SAM3_CHECKPOINT_PATH=/app/models/sam3.pt`
+- `SAM3_CHECKPOINT_URL=https://www.modelscope.cn/models/facebook/sam3/resolve/master/sam3.pt`
 - `SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz`
 
-如果配置了 `SAM3_CHECKPOINT_URL` / `SAM3_BPE_URL`，首页会在模型缺失时先弹出确认框。用户同意后，应用再把缺失文件下载到持久化目录。这样可以避免把大模型直接打进 `.lpk`，也不需要每次重装后重新手工复制。
+如果配置了 `SAM3_CHECKPOINT_URL` / `SAM3_BPE_URL`，首页会在模型缺失时先弹出确认框。用户同意后，应用再把缺失文件下载到持久化目录。首页也支持填写自定义 `sam3.pt` 下载地址；留空时会自动使用默认的 ModelScope 地址，填写后会把地址保存到持久化配置中，后续重试或重启仍会沿用。这样可以避免把大模型直接打进 `.lpk`，也不需要每次重装后重新手工复制。
 
 如果你放在其他路径，请同步调整 manifest 中的环境变量，或者修改挂载目录里的配置文件。
 
@@ -79,7 +80,7 @@
 
 - `OUTPUT_DIR=/app/output`
 - `SAM3_CHECKPOINT_PATH=/app/models/sam3.pt`
-- `SAM3_CHECKPOINT_URL=`
+- `SAM3_CHECKPOINT_URL=https://www.modelscope.cn/models/facebook/sam3/resolve/master/sam3.pt`
 - `SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz`
 - `SAM3_BPE_URL=https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz`
 - `MULTIMODAL_MODE=api`
