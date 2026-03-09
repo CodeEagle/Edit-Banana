@@ -698,6 +698,42 @@ def root():
           .url-config {
             margin-top: 16px;
           }
+          .advanced-settings {
+            margin-top: 16px;
+            border: 1px solid rgba(224, 205, 163, 0.92);
+            border-radius: 18px;
+            background: rgba(250, 243, 226, 0.72);
+            overflow: hidden;
+          }
+          .advanced-settings summary {
+            list-style: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            color: #5d563f;
+            font-size: 14px;
+            font-weight: 800;
+            cursor: pointer;
+            user-select: none;
+          }
+          .advanced-settings summary::-webkit-details-marker {
+            display: none;
+          }
+          .advanced-settings summary::after {
+            content: "+";
+            font-size: 18px;
+            line-height: 1;
+            color: var(--banana-dark);
+          }
+          .advanced-settings[open] summary::after {
+            content: "−";
+          }
+          .advanced-settings-body {
+            padding: 0 16px 16px;
+            border-top: 1px solid rgba(224, 205, 163, 0.72);
+          }
           .url-config label {
             display: block;
             margin-bottom: 8px;
@@ -862,11 +898,16 @@ def root():
               <input id="consent-checkbox" type="checkbox" />
               <span id="consent-text">I agree to download the required model files into this workspace storage.</span>
             </label>
-            <div class="url-config">
-              <label id="checkpoint-url-label" for="checkpoint-url">Custom SAM3 checkpoint URL (optional)</label>
-              <input id="checkpoint-url" type="url" spellcheck="false" placeholder="Leave blank to use the default mirror" />
-              <div id="checkpoint-url-hint" class="field-hint">Leave this empty to use the built-in default source. Filling it will save your custom address for later retries.</div>
-            </div>
+            <details id="advanced-download-settings" class="advanced-settings">
+              <summary id="advanced-settings-summary">Advanced settings</summary>
+              <div class="advanced-settings-body">
+                <div class="url-config">
+                  <label id="checkpoint-url-label" for="checkpoint-url">Custom SAM3 checkpoint URL (optional)</label>
+                  <input id="checkpoint-url" type="url" spellcheck="false" placeholder="Leave blank to use the default mirror" />
+                  <div id="checkpoint-url-hint" class="field-hint">Leave this empty to use the built-in default source. Filling it will save your custom address for later retries.</div>
+                </div>
+              </div>
+            </details>
             <div class="modal-actions">
               <button id="download-models" type="button">Download and continue</button>
               <button id="refresh-status" class="secondary-button" type="button">Refresh status</button>
@@ -922,6 +963,7 @@ def root():
               checkpointUrlHint: "Leave this empty to use the built-in default source. Filling it will save your custom address for later retries.",
               checkpointUrlSaved: "Custom download address saved.",
               usingDefaultSource: "Using the default model source.",
+              advancedSettings: "Advanced settings",
             },
             zh: {
               tagline: "把图片或 PDF 转成可编辑的 Draw.io 图，交给 AI 处理",
@@ -967,6 +1009,7 @@ def root():
               checkpointUrlHint: "留空会使用内置默认下载源；填写后会保存你的自定义地址，后续重试继续使用。",
               checkpointUrlSaved: "自定义下载地址已保存。",
               usingDefaultSource: "当前使用默认模型下载源。",
+              advancedSettings: "高级设置",
             },
           };
 
@@ -995,6 +1038,7 @@ def root():
           const progressFill = document.getElementById("progress-fill");
           const progressFile = document.getElementById("progress-file");
           const progressPercent = document.getElementById("progress-percent");
+          const advancedSettings = document.getElementById("advanced-download-settings");
           const checkpointUrlInput = document.getElementById("checkpoint-url");
           const checkpointUrlHint = document.getElementById("checkpoint-url-hint");
 
@@ -1020,6 +1064,7 @@ def root():
             document.getElementById("reset-download").textContent = t("reset");
             document.getElementById("modal-note").textContent = t("waiting");
             document.getElementById("progress-file").textContent = t("progressPreparing");
+            document.getElementById("advanced-settings-summary").textContent = t("advancedSettings");
             document.getElementById("checkpoint-url-label").textContent = t("checkpointUrlLabel");
             document.getElementById("checkpoint-url").placeholder = t("checkpointUrlPlaceholder");
             document.getElementById("checkpoint-url-hint").textContent = t("checkpointUrlHint");
@@ -1053,8 +1098,12 @@ def root():
 
           function syncDownloadConfig(state) {
             const config = state.download_config || {};
+            const hasCustomUrl = Boolean(config.checkpoint_url);
             if (document.activeElement !== checkpointUrlInput) {
               checkpointUrlInput.value = config.checkpoint_url || "";
+            }
+            if (hasCustomUrl) {
+              advancedSettings.open = true;
             }
 
             checkpointUrlHint.textContent =
