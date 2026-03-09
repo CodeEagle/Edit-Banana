@@ -42,7 +42,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TARGET_SHA="${{ inputs.target_version }}"
-          CURRENT_VERSION=$(sed -n 's/^version: //p' lzc-manifest.yml | head -1)
 
           if [ -n "$TARGET_SHA" ]; then
             LATEST_SHA="$TARGET_SHA"
@@ -51,26 +50,26 @@ jobs:
             LATEST_SHA=$(gh api "repos/${{ env.UPSTREAM_REPO }}/commits/${DEFAULT_BRANCH}" --jq '.sha')
           fi
 
-          if ! echo "$CURRENT_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Current manifest version is not plain semver: $CURRENT_VERSION"
+          UPSTREAM_SERVER=$(gh api "repos/${{ env.UPSTREAM_REPO }}/contents/server_pa.py?ref=${LATEST_SHA}" --jq '.content' | base64 -d)
+          UPSTREAM_VERSION=$(printf '%s\n' "$UPSTREAM_SERVER" | sed -n 's/.*version="\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -1)
+
+          if [ -z "$UPSTREAM_VERSION" ]; then
+            echo "Failed to detect upstream version from server_pa.py"
             exit 1
           fi
-
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-          NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
 
           COMMIT_DATE=$(gh api "repos/${{ env.UPSTREAM_REPO }}/commits/${LATEST_SHA}" --jq '.commit.committer.date')
           SHORT_SHA=$(printf '%s' "$LATEST_SHA" | cut -c1-12)
 
           echo "latest_sha=$LATEST_SHA" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
-          echo "latest_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "latest_version=$UPSTREAM_VERSION" >> "$GITHUB_OUTPUT"
 
           {
             echo "Build from upstream commit ${LATEST_SHA}"
             echo
             echo "Commit date: ${COMMIT_DATE}"
-            echo "Package version: ${NEXT_VERSION}"
+            echo "Upstream version: ${UPSTREAM_VERSION}"
           } > /tmp/release_notes.txt
 
       - name: Check if update needed

@@ -16,6 +16,9 @@
 > [!IMPORTANT]
 > 上游 `README.md` 写的是 Apache 2.0，但仓库根目录 `LICENSE` 实际为 AGPL v3。这里按仓库内许可证文件填写和分发。
 
+> [!NOTE]
+> 上游没有 release/tag 可复用。当前自动构建直接复用上游 `server_pa.py` 中声明的版本号 `1.0.0`，不再额外 bump 本仓库 patch 版本。
+
 ## 迁移说明
 
 - 运行形态：单容器 FastAPI 服务
@@ -101,11 +104,11 @@
 包含 `.github/workflows/update-image.yml`：
 
 - 每 6 小时检查上游默认分支最新 commit
+- 直接复用上游源码里声明的版本号
 - 以最新 commit SHA 构建镜像
 - 推送到 GHCR
 - 复制到 `registry.lazycat.cloud`
 - 回写 `lzc-manifest.yml` 和 `Dockerfile`
-- 按普通 semver 递增 patch 版本号
 - 构建 `.lpk` 并创建 GitHub Release
 
 ## 本目录文件
