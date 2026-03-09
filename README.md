@@ -25,12 +25,12 @@
 - 容器入口：`http://edit-banana:8000/`
 - 懒猫入口：应用首页
 - 对外能力：
-  - `GET /`：内置上传界面，可直接上传文件并下载结果
+  - `GET /`：接近上游线上站点风格的内置上传界面，可直接上传文件并下载结果
   - `GET /docs`：FastAPI Swagger UI
   - `GET /health`：健康检查
   - `POST /convert`：上传图片并直接返回生成的 DrawIO 文件
 
-> 当前首页不是上游线上 demo 的原始 Web UI。上游仓库没有公开那套前端代码，这里补的是面向 LazyCat 安装包的简化上传界面。
+> 当前首页不是上游线上 demo 的原始 Web UI。上游仓库没有公开那套前端代码，这里只能基于公开 API 重做一套本地前端。
 
 ## 为什么不是直接复用镜像
 
@@ -54,15 +54,24 @@
 
 ## 首次启动前准备
 
-上游开源仓库不包含模型权重。首次使用前，至少需要把以下文件放入 `/lzcapp/var/models/`：
+上游开源仓库不包含模型权重。这里提供两种处理方式。
+
+方式 A：手工放入挂载目录 `/lzcapp/var/models/`
 
 - `sam3.pt`
 - `bpe_simple_vocab_16e6.txt.gz`
+
+方式 B：在环境变量中提供可直链下载的 URL，首次启动自动拉取缺失文件
+
+- `SAM3_CHECKPOINT_URL`
+- `SAM3_BPE_URL`
 
 默认环境变量已经指向：
 
 - `SAM3_CHECKPOINT_PATH=/app/models/sam3.pt`
 - `SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz`
+
+如果配置了 `SAM3_CHECKPOINT_URL` / `SAM3_BPE_URL`，启动脚本会在目标文件不存在时自动下载。这样可以避免把大模型直接打进 `.lpk`，也不需要每次重装后重新手工复制。
 
 如果你放在其他路径，请同步调整 manifest 中的环境变量，或者修改挂载目录里的配置文件。
 
@@ -70,7 +79,9 @@
 
 - `OUTPUT_DIR=/app/output`
 - `SAM3_CHECKPOINT_PATH=/app/models/sam3.pt`
+- `SAM3_CHECKPOINT_URL=`
 - `SAM3_BPE_PATH=/app/models/bpe_simple_vocab_16e6.txt.gz`
+- `SAM3_BPE_URL=`
 - `MULTIMODAL_MODE=api`
 - `MULTIMODAL_API_KEY=`
 - `MULTIMODAL_BASE_URL=`
