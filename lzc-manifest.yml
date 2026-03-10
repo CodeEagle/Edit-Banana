@@ -47,9 +47,6 @@ services:
       mkdir -p /app/config
       mkdir -p /app/models
       mkdir -p /app/output
-      chown -R appuser:appuser /app/config
-      chown -R appuser:appuser /app/models
-      chown -R appuser:appuser /app/output
 locales:
   en:
     name: Edit Banana
