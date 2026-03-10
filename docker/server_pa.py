@@ -1089,6 +1089,7 @@ def root():
           const closeModalBtn = document.getElementById("close-modal");
 
           let pollTimer = null;
+          let shouldPoll = false;
           let currentModelState = null;
           let userOpenedModal = false;
 
@@ -1162,6 +1163,7 @@ def root():
 
           function showModal() {
             console.log("[showModal] showing modal");
+            console.trace("[showModal] call stack");
             modelModal.classList.remove("hidden");
           }
 
@@ -1171,6 +1173,8 @@ def root():
           }
 
           function stopPolling() {
+            console.log("[stopPolling] pollTimer=", pollTimer, "shouldPoll=", shouldPoll);
+            shouldPoll = false;
             if (pollTimer) {
               window.clearTimeout(pollTimer);
               pollTimer = null;
@@ -1178,8 +1182,17 @@ def root():
           }
 
           function schedulePolling() {
+            console.log("[schedulePolling] scheduling poll in 1200ms");
             stopPolling();
-            pollTimer = window.setTimeout(refreshModelStatus, 1200);
+            shouldPoll = true;
+            pollTimer = window.setTimeout(async () => {
+              // Check if polling was stopped while we were waiting
+              if (!shouldPoll) {
+                console.log("[pollTimer callback] shouldPoll is false, skipping");
+                return;
+              }
+              await refreshModelStatus();
+            }, 1200);
           }
 
           function getFileLabel(key, fallbackLabel) {
@@ -1254,7 +1267,9 @@ def root():
 
             if (state.ready) {
               console.log("[applyModelState] state.ready is TRUE - unblocking panel and hiding modal");
+              console.log("[applyModelState] about to call stopPolling, shouldPoll=", shouldPoll);
               stopPolling();
+              console.log("[applyModelState] stopPolling returned, shouldPoll=", shouldPoll);
               // Unblock the main panel now that model is ready
               mainPanel.classList.remove("blocked");
               console.log("[applyModelState] removed 'blocked' class from mainPanel");
@@ -1275,7 +1290,13 @@ def root():
               return;
             }
 
-            console.log("[applyModelState] state.ready is FALSE - showing modal");
+            console.log("[applyModelState] state.ready is FALSE - checking if should show modal, shouldPoll=", shouldPoll);
+            // If polling was stopped (e.g., we already hid the modal), don't re-show it
+            // unless this is a user-initiated refresh or download is in progress
+            if (!shouldPoll && state.progress.status !== "downloading") {
+              console.log("[applyModelState] skipping modal show - polling was stopped and not downloading");
+              return;
+            }
             // Hide close button when modal is shown for non-ready states
             closeModalBtn.classList.add("hidden");
             // Hide the button when modal is shown
@@ -1337,10 +1358,12 @@ def root():
           }
 
           async function refreshModelStatus() {
-            console.log("[refreshModelStatus] fetching model status...");
+            console.log("[refreshModelStatus] fetching model status..., shouldPoll=", shouldPoll);
             try {
               const state = await fetchModelStatus();
-              console.log("[refreshModelStatus] got state, ready=", state.ready);
+              console.log("[refreshModelStatus] got state, ready=", state.ready, "shouldPoll=", shouldPoll);
+              // Only apply state changes if we're still polling or this is a manual refresh
+              // This prevents race conditions where a stale timer fires after stopPolling
               applyModelState(state);
               return state;
             } catch (error) {
@@ -1534,7 +1557,7 @@ def root():
           });
 
           localizeStaticText();
-          console.log("[init] page loaded, calling refreshModelStatus...");
+          console.log("[init] page loaded, VERSION=2, calling refreshModelStatus...");
           refreshModelStatus();
         </script>
       </body>
