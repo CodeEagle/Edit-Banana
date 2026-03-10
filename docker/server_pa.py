@@ -1160,43 +1160,13 @@ def root():
                 : t("checkpointUrlHint");
           }
 
-            mainPanel.classList.add("blocked");
+          function showModal() {
+            modelModal.classList.remove("hidden");
           }
 
-          // Hide close button when modal is shown
-          modelStatusBtn.classList.remove("hidden");
-          closeModalBtn.classList.add("hidden");
-          modelStatusBtn.classList.remove("hidden");
-        }
-        submitButton.disabled = false;
-        setStatus(t("ready"), "");
-        return;
-      }
-
-      // Hide the button when modal is shown
-      modelStatusBtn.classList.add("hidden");
-      showModal();
-      submitButton.disabled = true;
-      refreshButton.disabled = true;
-      resetButton.classList.add("hidden");
-      setModalNote(t("downloading"), "");
-      setStatus(t("downloading"), "");
-      schedulePolling();
-      return;
-    }
-
-    stopPolling();
-
-    setBusyState(downloadButton, false);
-    setBusyState(refreshButton, false);
-    setBusyState(resetButton, false);
-    downloadButton.disabled = false;
-    setBusyState(downloadButton, false);
-    setBusyState(closeModalBtn, false);
-    closeModalBtn.classList.remove("hidden");
-    modelStatusBtn.classList.remove("hidden");
-    }
-  }
+          function hideModal() {
+            modelModal.classList.add("hidden");
+          }
 
           function stopPolling() {
             if (pollTimer) {
