@@ -662,6 +662,27 @@ def root():
             line-height: 1.05;
             color: var(--ink);
           }
+          .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+          }
+          .close-modal-btn {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            border-radius: 999px;
+            background: rgba(236, 225, 203, 0.95);
+            color: #65563d;
+            font-size: 20px;
+            line-height: 1;
+            box-shadow: none;
+          }
+          .close-modal-btn:hover {
+            background: rgba(226, 215, 193, 0.98);
+          }
           .modal-card p {
             margin: 14px 0 0;
             font-size: 15px;
@@ -766,6 +787,21 @@ def root():
             color: #65563d;
             box-shadow: none;
           }
+          .model-status-btn {
+            position: absolute;
+            top: 18px;
+            right: 18px;
+            padding: 8px 14px;
+            font-size: 13px;
+            border-radius: 999px;
+            background: rgba(236, 225, 203, 0.95);
+            color: #65563d;
+            box-shadow: none;
+            z-index: 10;
+          }
+          .model-status-btn:hover {
+            background: rgba(226, 215, 193, 0.98);
+          }
           .danger-button {
             background: #fff1ec;
             color: #af3f17;
@@ -839,6 +875,7 @@ def root():
       <body>
         <main class="shell">
           <section id="main-panel" class="panel blocked">
+            <button id="model-status-btn" class="model-status-btn hidden" type="button">Model Settings</button>
             <div class="stamp stamp-left"></div>
             <div class="stamp stamp-right"></div>
             <div class="brand">
@@ -882,7 +919,10 @@ def root():
 
         <div id="model-modal" class="modal visible" role="dialog" aria-modal="true" aria-labelledby="modal-title">
           <div class="modal-card">
-            <h3 id="modal-title">Prepare model files</h3>
+            <div class="modal-header">
+              <h3 id="modal-title">Prepare model files</h3>
+              <button id="close-modal" class="close-modal-btn hidden" type="button" aria-label="Close">×</button>
+            </div>
             <p id="modal-body">This app needs model files before it can convert diagrams.</p>
             <ul id="missing-files"></ul>
             <div id="progress-wrap" class="progress-wrap hidden">
@@ -964,6 +1004,8 @@ def root():
               checkpointUrlSaved: "Custom download address saved.",
               usingDefaultSource: "Using the default model source.",
               advancedSettings: "Advanced settings",
+              modelStatusBtn: "Model Settings",
+              closeModal: "Close",
             },
             zh: {
               tagline: "把图片或 PDF 转成可编辑的 Draw.io 图，交给 AI 处理",
@@ -1010,6 +1052,8 @@ def root():
               checkpointUrlSaved: "自定义下载地址已保存。",
               usingDefaultSource: "当前使用默认模型下载源。",
               advancedSettings: "高级设置",
+              modelStatusBtn: "模型设置",
+              closeModal: "关闭",
             },
           };
 
@@ -1027,6 +1071,7 @@ def root():
           const fileNameEl = document.getElementById("file-name");
           const mainPanel = document.getElementById("main-panel");
           const modelModal = document.getElementById("model-modal");
+          const modelStatusBtn = document.getElementById("model-status-btn");
           const modalBody = document.getElementById("modal-body");
           const missingFiles = document.getElementById("missing-files");
           const consentCheckbox = document.getElementById("consent-checkbox");
@@ -1041,9 +1086,11 @@ def root():
           const advancedSettings = document.getElementById("advanced-download-settings");
           const checkpointUrlInput = document.getElementById("checkpoint-url");
           const checkpointUrlHint = document.getElementById("checkpoint-url-hint");
+          const closeModalBtn = document.getElementById("close-modal");
 
           let pollTimer = null;
           let currentModelState = null;
+          let userOpenedModal = false;
 
           function localizeStaticText() {
             document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
@@ -1068,6 +1115,7 @@ def root():
             document.getElementById("checkpoint-url-label").textContent = t("checkpointUrlLabel");
             document.getElementById("checkpoint-url").placeholder = t("checkpointUrlPlaceholder");
             document.getElementById("checkpoint-url-hint").textContent = t("checkpointUrlHint");
+            document.getElementById("model-status-btn").textContent = t("modelStatusBtn");
           }
 
           function formatBytes(value) {
@@ -1205,13 +1253,26 @@ def root():
 
             if (state.ready) {
               stopPolling();
-              hideModal();
-              resetButton.classList.add("hidden");
+              // Only hide modal if user didn't manually open it
+              if (!userOpenedModal) {
+                hideModal();
+                resetButton.classList.add("hidden");
+                closeModalBtn.classList.add("hidden");
+                // Show the model status button so user can reopen the modal
+                modelStatusBtn.classList.remove("hidden");
+              } else {
+                // User opened modal manually, show close button
+                closeModalBtn.classList.remove("hidden");
+              }
               submitButton.disabled = false;
               setStatus(t("ready"), "");
               return;
             }
 
+            // Hide close button when modal is shown for non-ready states
+            closeModalBtn.classList.add("hidden");
+            // Hide the button when modal is shown
+            modelStatusBtn.classList.add("hidden");
             showModal();
             submitButton.disabled = true;
             renderMissingFiles(state.missing_keys || [], state.files || []);
@@ -1281,6 +1342,21 @@ def root():
               return null;
             }
           }
+
+          modelStatusBtn.addEventListener("click", () => {
+            modelStatusBtn.classList.add("hidden");
+            userOpenedModal = true;
+            showModal();
+          });
+
+          closeModalBtn.addEventListener("click", () => {
+            userOpenedModal = false;
+            hideModal();
+            // Show the button again when modal is closed
+            if (currentModelState && currentModelState.ready) {
+              modelStatusBtn.classList.remove("hidden");
+            }
+          });
 
           fileInput.addEventListener("change", () => {
             const file = fileInput.files[0];

@@ -18,6 +18,10 @@ services:
   edit-banana:
     image: registry.lazycat.cloud/invokerlaw/codeeagle/edit-banana:2c610a5deab9cfd4
     environment:
+      - PORT=8000
+      - BIND=0.0.0.0
+      - BEHIND_PROXY=true
+      - NO_TLS=true
       - OUTPUT_DIR=/app/output
       - SAM3_CHECKPOINT_PATH=/app/models/sam3.pt
       - SAM3_CHECKPOINT_URL=https://www.modelscope.cn/models/facebook/sam3/resolve/master/sam3.pt
@@ -43,6 +47,9 @@ services:
       mkdir -p /app/config
       mkdir -p /app/models
       mkdir -p /app/output
+      chown -R appuser:appuser /app/config
+      chown -R appuser:appuser /app/models
+      chown -R appuser:appuser /app/output
 locales:
   en:
     name: Edit Banana
