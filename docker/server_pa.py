@@ -1426,6 +1426,15 @@ def root():
             setModalNote(t("downloading"), "");
             setStatus(t("downloading"), "");
 
+            // Show progress bar immediately to indicate download is starting
+            progressWrap.classList.remove("hidden");
+            progressFile.textContent = t("progressPreparing");
+            progressPercent.textContent = "0%";
+            progressFill.style.width = "0%";
+
+            // Ensure modal stays visible during download
+            showModal();
+
             try {
               const response = await fetch("/initialize-models", {
                 method: "POST",
@@ -1453,6 +1462,8 @@ def root():
               refreshButton.disabled = false;
               resetButton.classList.remove("hidden");
               setBusyState(downloadButton, false);
+              // Hide progress bar on error
+              progressWrap.classList.add("hidden");
             }
           });
 
