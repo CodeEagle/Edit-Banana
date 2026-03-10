@@ -1489,8 +1489,17 @@ def root():
               }
 
               const state = await refreshModelStatus();
-              // Only continue polling if model is not ready yet
-              if (state && !state.ready) {
+              if (state && state.ready) {
+                userOpenedModal = false;
+                hideModal();
+                mainPanel.classList.remove("blocked");
+                submitButton.disabled = false;
+                resetButton.classList.add("hidden");
+                closeModalBtn.classList.add("hidden");
+                modelStatusBtn.classList.remove("hidden");
+                setModalNote(t("downloadDone"), "success");
+                setStatus(t("ready"), "");
+              } else if (state) {
                 schedulePolling();
               }
             } catch (error) {
