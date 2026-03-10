@@ -1251,6 +1251,8 @@ def root():
 
             if (state.ready) {
               stopPolling();
+              // Unblock the main panel now that model is ready
+              mainPanel.classList.remove("blocked");
               // Only hide modal if user didn't manually open it
               if (!userOpenedModal) {
                 hideModal();
