@@ -1161,10 +1161,12 @@ def root():
           }
 
           function showModal() {
+            console.log("[showModal] showing modal");
             modelModal.classList.remove("hidden");
           }
 
           function hideModal() {
+            console.log("[hideModal] hiding modal");
             modelModal.classList.add("hidden");
           }
 
@@ -1241,6 +1243,7 @@ def root():
           }
 
           function applyModelState(state) {
+            console.log("[applyModelState] called with state:", JSON.stringify(state));
             currentModelState = state;
             updateProgress(state.progress);
             syncDownloadConfig(state);
@@ -1250,12 +1253,15 @@ def root():
             downloadButton.textContent = t("download");
 
             if (state.ready) {
+              console.log("[applyModelState] state.ready is TRUE - unblocking panel and hiding modal");
               stopPolling();
               // Unblock the main panel now that model is ready
               mainPanel.classList.remove("blocked");
+              console.log("[applyModelState] removed 'blocked' class from mainPanel");
               // Only hide modal if user didn't manually open it
               if (!userOpenedModal) {
                 hideModal();
+                console.log("[applyModelState] modal hidden (userOpenedModal=false)");
                 resetButton.classList.add("hidden");
                 closeModalBtn.classList.add("hidden");
                 // Show the model status button so user can reopen the modal
@@ -1269,6 +1275,7 @@ def root():
               return;
             }
 
+            console.log("[applyModelState] state.ready is FALSE - showing modal");
             // Hide close button when modal is shown for non-ready states
             closeModalBtn.classList.add("hidden");
             // Hide the button when modal is shown
@@ -1330,11 +1337,14 @@ def root():
           }
 
           async function refreshModelStatus() {
+            console.log("[refreshModelStatus] fetching model status...");
             try {
               const state = await fetchModelStatus();
+              console.log("[refreshModelStatus] got state, ready=", state.ready);
               applyModelState(state);
               return state;
             } catch (error) {
+              console.error("[refreshModelStatus] error:", error);
               stopPolling();
               setModalNote(error.message || t("refreshFailed"), "error");
               setStatus(error.message || t("refreshFailed"), "error");
@@ -1521,6 +1531,7 @@ def root():
           });
 
           localizeStaticText();
+          console.log("[init] page loaded, calling refreshModelStatus...");
           refreshModelStatus();
         </script>
       </body>
