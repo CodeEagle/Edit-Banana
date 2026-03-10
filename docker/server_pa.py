@@ -1465,8 +1465,11 @@ def root():
                 throw new Error(detail);
               }
 
-              await refreshModelStatus();
-              schedulePolling();
+              const state = await refreshModelStatus();
+              // Only continue polling if model is not ready yet
+              if (state && !state.ready) {
+                schedulePolling();
+              }
             } catch (error) {
               setModalNote(error.message || t("modelNotConfigured"), "error");
               setStatus(error.message || t("modelNotConfigured"), "error");
