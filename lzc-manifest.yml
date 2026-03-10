@@ -16,7 +16,7 @@ application:
       backend: http://edit-banana:8000/
 services:
   edit-banana:
-    image: registry.lazycat.cloud/invokerlaw/codeeagle/edit-banana:7250be769d630327
+    image: registry.lazycat.cloud/invokerlaw/codeeagle/edit-banana:baf7c53ad6c5da96
     environment:
       - OUTPUT_DIR=/app/output
       - SAM3_CHECKPOINT_PATH=/app/models/sam3.pt
