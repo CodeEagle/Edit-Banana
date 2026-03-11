@@ -74,7 +74,18 @@ RUN chmod +x /usr/local/bin/lazycat-entrypoint \
     && python -m pip install --upgrade pip wheel "setuptools<81" \
     && python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision \
     && python -m pip install /tmp/sam3 \
-    && python -m pip install -r requirements.txt python-multipart \
+    && python -m pip install \
+        "numpy>=1.26,<2" \
+        "opencv-python-headless<4.11" \
+        "timm>=1.0.17" \
+        tqdm \
+        "ftfy==6.1.1" \
+        regex \
+        "iopath>=0.1.10" \
+        huggingface_hub \
+        einops \
+        -r requirements.txt \
+        python-multipart \
     && python - <<'PY'
 import pkg_resources
 import sam3.model_builder
