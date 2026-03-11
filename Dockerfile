@@ -138,6 +138,15 @@ decoder.write_text(
     ),
     encoding="utf-8",
 )
+
+app_sam3 = Path("/app/modules/sam3_info_extractor.py")
+app_sam3.write_text(
+    app_sam3.read_text(encoding="utf-8").replace(
+        "        self._processor = Sam3Processor(self._model)\n",
+        "        self._processor = Sam3Processor(self._model, device=self.device)\n",
+    ),
+    encoding="utf-8",
+)
 PY
 
 COPY docker/entrypoint.sh /usr/local/bin/lazycat-entrypoint
