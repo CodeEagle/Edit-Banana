@@ -65,6 +65,50 @@ __all__ = [
 ''',
     encoding="utf-8",
 )
+
+model_builder = Path("/tmp/sam3/sam3/model_builder.py")
+model_builder.write_text(
+    model_builder.read_text(encoding="utf-8").replace(
+        """from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor
+from sam3.model.sam3_image import Sam3Image, Sam3ImageOnVideoMultiGPU
+from sam3.model.sam3_tracking_predictor import Sam3TrackerPredictor
+from sam3.model.sam3_video_inference import Sam3VideoInferenceWithInstanceInteractivity
+from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU
+""",
+        """try:
+    from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor
+except ModuleNotFoundError:
+    SAM3InteractiveImagePredictor = None
+
+try:
+    from sam3.model.sam3_image import Sam3Image, Sam3ImageOnVideoMultiGPU
+    from sam3.model.sam3_tracking_predictor import Sam3TrackerPredictor
+    from sam3.model.sam3_video_inference import Sam3VideoInferenceWithInstanceInteractivity
+    from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU
+except ModuleNotFoundError:
+    from sam3.model.sam3_image import Sam3Image
+
+    Sam3ImageOnVideoMultiGPU = None
+    Sam3TrackerPredictor = None
+    Sam3VideoInferenceWithInstanceInteractivity = None
+    Sam3VideoPredictorMultiGPU = None
+""",
+    ),
+    encoding="utf-8",
+)
+
+sam3_image = Path("/tmp/sam3/sam3/model/sam3_image.py")
+sam3_image.write_text(
+    sam3_image.read_text(encoding="utf-8").replace(
+        "from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor\n",
+        """try:
+    from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor
+except ModuleNotFoundError:
+    SAM3InteractiveImagePredictor = None
+""",
+    ),
+    encoding="utf-8",
+)
 PY
 
 COPY docker/entrypoint.sh /usr/local/bin/lazycat-entrypoint
