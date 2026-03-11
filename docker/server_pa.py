@@ -1089,9 +1089,9 @@ def root():
           const closeModalBtn = document.getElementById("close-modal");
 
           let pollTimer = null;
-          let shouldPoll = false;
           let currentModelState = null;
-          let userOpenedModal = false;
+          let modalPinnedOpen = false;
+          let refreshRequestId = 0;
 
           function localizeStaticText() {
             document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
@@ -1161,20 +1161,7 @@ def root():
                 : t("checkpointUrlHint");
           }
 
-          function showModal() {
-            console.log("[showModal] showing modal");
-            console.trace("[showModal] call stack");
-            modelModal.classList.remove("hidden");
-          }
-
-          function hideModal() {
-            console.log("[hideModal] hiding modal");
-            modelModal.classList.add("hidden");
-          }
-
           function stopPolling() {
-            console.log("[stopPolling] pollTimer=", pollTimer, "shouldPoll=", shouldPoll);
-            shouldPoll = false;
             if (pollTimer) {
               window.clearTimeout(pollTimer);
               pollTimer = null;
@@ -1182,15 +1169,8 @@ def root():
           }
 
           function schedulePolling() {
-            console.log("[schedulePolling] scheduling poll in 1200ms");
             stopPolling();
-            shouldPoll = true;
             pollTimer = window.setTimeout(async () => {
-              // Check if polling was stopped while we were waiting
-              if (!shouldPoll) {
-                console.log("[pollTimer callback] shouldPoll is false, skipping");
-                return;
-              }
               await refreshModelStatus();
             }, 1200);
           }
@@ -1256,7 +1236,6 @@ def root():
           }
 
           function applyModelState(state) {
-            console.log("[applyModelState] called with state:", JSON.stringify(state));
             currentModelState = state;
             updateProgress(state.progress);
             syncDownloadConfig(state);
@@ -1264,48 +1243,25 @@ def root():
             setBusyState(refreshButton, false);
             setBusyState(resetButton, false);
             downloadButton.textContent = t("download");
+            const ready = Boolean(state.ready);
+            const downloading = state.progress.status === "downloading";
 
-            if (state.ready) {
-              console.log("[applyModelState] state.ready is TRUE - unblocking panel and hiding modal");
-              console.log("[applyModelState] about to call stopPolling, shouldPoll=", shouldPoll);
+            mainPanel.classList.toggle("blocked", !ready);
+            submitButton.disabled = !ready;
+            modelModal.classList.toggle("hidden", ready && !modalPinnedOpen);
+            modelStatusBtn.classList.toggle("hidden", !ready || modalPinnedOpen);
+            closeModalBtn.classList.toggle("hidden", !(ready && modalPinnedOpen));
+
+            if (ready) {
               stopPolling();
-              console.log("[applyModelState] stopPolling returned, shouldPoll=", shouldPoll);
-              // Unblock the main panel now that model is ready
-              mainPanel.classList.remove("blocked");
-              console.log("[applyModelState] removed 'blocked' class from mainPanel");
-              // Only hide modal if user didn't manually open it
-              if (!userOpenedModal) {
-                hideModal();
-                console.log("[applyModelState] modal hidden (userOpenedModal=false)");
-                resetButton.classList.add("hidden");
-                closeModalBtn.classList.add("hidden");
-                // Show the model status button so user can reopen the modal
-                modelStatusBtn.classList.remove("hidden");
-              } else {
-                // User opened modal manually, show close button
-                closeModalBtn.classList.remove("hidden");
-              }
-              submitButton.disabled = false;
+              resetButton.classList.add("hidden");
               setStatus(t("ready"), "");
               return;
             }
 
-            console.log("[applyModelState] state.ready is FALSE - checking if should show modal, shouldPoll=", shouldPoll);
-            // If polling was stopped (e.g., we already hid the modal), don't re-show it
-            // unless this is a user-initiated refresh or download is in progress
-            if (!shouldPoll && state.progress.status !== "downloading") {
-              console.log("[applyModelState] skipping modal show - polling was stopped and not downloading");
-              return;
-            }
-            // Hide close button when modal is shown for non-ready states
-            closeModalBtn.classList.add("hidden");
-            // Hide the button when modal is shown
-            modelStatusBtn.classList.add("hidden");
-            showModal();
-            submitButton.disabled = true;
             renderMissingFiles(state.missing_keys || [], state.files || []);
 
-            if (state.progress.status === "downloading") {
+            if (downloading) {
               modalBody.textContent = t("modalBodyDownloading");
               downloadButton.disabled = true;
               refreshButton.disabled = true;
@@ -1358,35 +1314,43 @@ def root():
           }
 
           async function refreshModelStatus() {
-            console.log("[refreshModelStatus] fetching model status..., shouldPoll=", shouldPoll);
+            const requestId = ++refreshRequestId;
             try {
               const state = await fetchModelStatus();
-              console.log("[refreshModelStatus] got state, ready=", state.ready, "shouldPoll=", shouldPoll);
-              // Only apply state changes if we're still polling or this is a manual refresh
-              // This prevents race conditions where a stale timer fires after stopPolling
+              if (requestId !== refreshRequestId) {
+                return state;
+              }
               applyModelState(state);
               return state;
             } catch (error) {
-              console.error("[refreshModelStatus] error:", error);
+              if (requestId !== refreshRequestId) {
+                return null;
+              }
               stopPolling();
               setModalNote(error.message || t("refreshFailed"), "error");
               setStatus(error.message || t("refreshFailed"), "error");
-              showModal();
+              modelModal.classList.remove("hidden");
               return null;
             }
           }
 
           modelStatusBtn.addEventListener("click", () => {
-            modelStatusBtn.classList.add("hidden");
-            userOpenedModal = true;
-            showModal();
+            modalPinnedOpen = true;
+            if (currentModelState) {
+              applyModelState(currentModelState);
+            } else {
+              modelModal.classList.remove("hidden");
+              modelStatusBtn.classList.add("hidden");
+              closeModalBtn.classList.remove("hidden");
+            }
           });
 
           closeModalBtn.addEventListener("click", () => {
-            userOpenedModal = false;
-            hideModal();
-            // Show the button again when modal is closed
-            if (currentModelState && currentModelState.ready) {
+            modalPinnedOpen = false;
+            if (currentModelState) {
+              applyModelState(currentModelState);
+            } else {
+              modelModal.classList.add("hidden");
               modelStatusBtn.classList.remove("hidden");
             }
           });
@@ -1467,8 +1431,8 @@ def root():
             progressPercent.textContent = "0%";
             progressFill.style.width = "0%";
 
-            // Ensure modal stays visible during download
-            showModal();
+            modalPinnedOpen = false;
+            modelModal.classList.remove("hidden");
 
             try {
               const response = await fetch("/initialize-models", {
@@ -1490,17 +1454,7 @@ def root():
 
               const state = await refreshModelStatus();
               if (state && state.ready) {
-                userOpenedModal = false;
-                hideModal();
-                mainPanel.classList.remove("blocked");
-                submitButton.disabled = false;
-                resetButton.classList.add("hidden");
-                closeModalBtn.classList.add("hidden");
-                modelStatusBtn.classList.remove("hidden");
                 setModalNote(t("downloadDone"), "success");
-                setStatus(t("ready"), "");
-              } else if (state) {
-                schedulePolling();
               }
             } catch (error) {
               setModalNote(error.message || t("modelNotConfigured"), "error");
