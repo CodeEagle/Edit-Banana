@@ -147,6 +147,15 @@ app_sam3.write_text(
     ),
     encoding="utf-8",
 )
+
+geometry_encoders = Path("/tmp/sam3/sam3/model/geometry_encoders.py")
+geometry_encoders.write_text(
+    geometry_encoders.read_text(encoding="utf-8").replace(
+        "            scale = scale.pin_memory().to(device=boxes_xyxy.device, non_blocking=True)\n",
+        "            if boxes_xyxy.device.type == \"cuda\":\n                scale = scale.pin_memory().to(device=boxes_xyxy.device, non_blocking=True)\n            else:\n                scale = scale.to(device=boxes_xyxy.device)\n",
+    ),
+    encoding="utf-8",
+)
 PY
 
 COPY docker/entrypoint.sh /usr/local/bin/lazycat-entrypoint
