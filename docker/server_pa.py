@@ -1248,7 +1248,7 @@ def root():
 
             mainPanel.classList.toggle("blocked", !ready);
             submitButton.disabled = !ready;
-            modelModal.classList.toggle("hidden", ready && !modalPinnedOpen);
+            modelModal.classList.toggle("visible", !ready || modalPinnedOpen);
             modelStatusBtn.classList.toggle("hidden", !ready || modalPinnedOpen);
             closeModalBtn.classList.toggle("hidden", !(ready && modalPinnedOpen));
 
@@ -1329,7 +1329,7 @@ def root():
               stopPolling();
               setModalNote(error.message || t("refreshFailed"), "error");
               setStatus(error.message || t("refreshFailed"), "error");
-              modelModal.classList.remove("hidden");
+              modelModal.classList.add("visible");
               return null;
             }
           }
@@ -1339,7 +1339,7 @@ def root():
             if (currentModelState) {
               applyModelState(currentModelState);
             } else {
-              modelModal.classList.remove("hidden");
+              modelModal.classList.add("visible");
               modelStatusBtn.classList.add("hidden");
               closeModalBtn.classList.remove("hidden");
             }
@@ -1350,7 +1350,7 @@ def root():
             if (currentModelState) {
               applyModelState(currentModelState);
             } else {
-              modelModal.classList.add("hidden");
+              modelModal.classList.remove("visible");
               modelStatusBtn.classList.remove("hidden");
             }
           });
@@ -1432,7 +1432,7 @@ def root():
             progressFill.style.width = "0%";
 
             modalPinnedOpen = false;
-            modelModal.classList.remove("hidden");
+            modelModal.classList.add("visible");
 
             try {
               const response = await fetch("/initialize-models", {
