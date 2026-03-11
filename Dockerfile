@@ -71,10 +71,16 @@ COPY docker/entrypoint.sh /usr/local/bin/lazycat-entrypoint
 COPY docker/server_pa.py /app/server_pa.py
 
 RUN chmod +x /usr/local/bin/lazycat-entrypoint \
-    && python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install --upgrade pip wheel "setuptools<81" \
     && python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision \
     && python -m pip install /tmp/sam3 \
-    && python -m pip install -r requirements.txt python-multipart
+    && python -m pip install -r requirements.txt python-multipart \
+    && python - <<'PY'
+import pkg_resources
+import sam3.model_builder
+
+print("pkg_resources and sam3.model_builder are importable")
+PY
 
 EXPOSE 8000
 
