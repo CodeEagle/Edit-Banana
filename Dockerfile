@@ -98,17 +98,28 @@ except ModuleNotFoundError:
 )
 
 sam3_image = Path("/tmp/sam3/sam3/model/sam3_image.py")
-sam3_image.write_text(
-    sam3_image.read_text(encoding="utf-8").replace(
-        "from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor\n",
-        """try:
+sam3_image_text = sam3_image.read_text(encoding="utf-8")
+sam3_image_text = sam3_image_text.replace(
+    "from typing import Dict, List, Optional, Tuple\n",
+    "from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING\n",
+)
+sam3_image_text = sam3_image_text.replace(
+    "from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor\n",
+    """try:
     from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor
 except ModuleNotFoundError:
     SAM3InteractiveImagePredictor = None
 """,
-    ),
-    encoding="utf-8",
 )
+sam3_image_text = sam3_image_text.replace(
+    "from sam3.train.data.collator import BatchedDatapoint\n",
+    """if TYPE_CHECKING:
+    from sam3.train.data.collator import BatchedDatapoint
+else:
+    BatchedDatapoint = Any
+""",
+)
+sam3_image.write_text(sam3_image_text, encoding="utf-8")
 PY
 
 COPY docker/entrypoint.sh /usr/local/bin/lazycat-entrypoint
