@@ -129,6 +129,15 @@ position_encoding.write_text(
     ),
     encoding="utf-8",
 )
+
+decoder = Path("/tmp/sam3/sam3/model/decoder.py")
+decoder.write_text(
+    decoder.read_text(encoding="utf-8").replace(
+        '                coords_h, coords_w = self._get_coords(\n                    feat_size, feat_size, device="cuda"\n                )\n',
+        '                coords_h, coords_w = self._get_coords(\n                    feat_size,\n                    feat_size,\n                    device="cuda" if torch.cuda.is_available() else "cpu",\n                )\n',
+    ),
+    encoding="utf-8",
+)
 PY
 
 COPY docker/entrypoint.sh /usr/local/bin/lazycat-entrypoint

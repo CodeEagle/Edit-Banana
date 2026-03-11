@@ -1,6 +1,6 @@
 lzc-sdk-version: '0.1'
 package: fun.selfstudio.app.migration.edit-banana
-version: 0.1.0
+version: 0.1.1
 min_os_version: 1.3.8
 name: Edit Banana
 description: (LazyCat Auto-build) Convert static diagrams into editable DrawIO files with SAM3 and OCR
