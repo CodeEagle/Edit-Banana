@@ -120,6 +120,15 @@ else:
 """,
 )
 sam3_image.write_text(sam3_image_text, encoding="utf-8")
+
+position_encoding = Path("/tmp/sam3/sam3/model/position_encoding.py")
+position_encoding.write_text(
+    position_encoding.read_text(encoding="utf-8").replace(
+        '                tensors = torch.zeros((1, 1) + size, device="cuda")\n',
+        '                tensors = torch.zeros((1, 1) + size, device="cuda" if torch.cuda.is_available() else "cpu")\n',
+    ),
+    encoding="utf-8",
+)
 PY
 
 COPY docker/entrypoint.sh /usr/local/bin/lazycat-entrypoint
